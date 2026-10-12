@@ -1,0 +1,9 @@
+Company_memory/
+node_modules/
+target/
+dist/
+ui/dist/
+.DS_Store
+*.part
+.local-release/
+__pycache__/

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "IPC for the shell's own local windows only. Windows that show a backend (http://127.0.0.1) get no capability, so a backend page can never call the shell.",
+  "windows": ["main", "manager"],
+  "permissions": ["core:default"]
+}

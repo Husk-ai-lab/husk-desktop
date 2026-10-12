@@ -1,0 +1,14 @@
+{
+  "name": "husk-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tauri 2 shell for Husk AI and Husk Studio",
+  "scripts": {
+    "tauri": "tauri",
+    "ui:dev": "npm --prefix ui run dev",
+    "ui:build": "npm --prefix ui run build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
