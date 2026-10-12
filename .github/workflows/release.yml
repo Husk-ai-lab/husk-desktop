@@ -1,9 +1,14 @@
-# Builds the signed shell installers for every OS when a `v*` tag is pushed.
-# Signing / notarisation secrets are referenced here but live only in GitHub Actions secrets.
+# Builds the shell installers for every OS. Signing / notarisation secrets are referenced here
+# but live only in GitHub Actions secrets.
+#
+# Manual-only for now: this workflow has never been run, and v0.1.0 was published by hand (a DMG
+# built on a Mac). Run it from the Actions tab once to see it pass. Then re-enable the tag trigger
+# by adding, under `on:`,
+#     push:
+#       tags: ["v*"]
+# Note that a tag build adds its own artifacts to a release with the same tag.
 name: release
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 jobs:

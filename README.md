@@ -81,6 +81,24 @@ On disk (`<app-data>` = `ai.husk.desktop`): `config.json`, `bin/<component>/<ver
 - [ ] Signing secrets in GitHub Actions (Apple Developer ID + notarisation, Windows Authenticode).
 - [ ] Source of versions: switch `ReleaseSource` to the gateway `GET /v1/status` once it exists.
 
+## Releasing
+
+The first release (`v0.1.0`) is a macOS Apple Silicon DMG built by hand. It is **not** signed with
+a Developer ID or notarised (that needs the paid Apple Developer Program), so Gatekeeper blocks it
+at first launch: right-click the app, choose Open, or run
+`xattr -dr com.apple.quarantine "/Applications/Husk AI.app"`.
+
+```bash
+# 1. bump the version in src-tauri/tauri.conf.json, src-tauri/Cargo.toml and package.json
+# 2. build (ad-hoc signature; real signing identities come from CI secrets, never from here)
+APPLE_SIGNING_IDENTITY=- npm run tauri build -- --bundles dmg
+# 3. the DMG is src-tauri/target/release/bundle/dmg/Husk AI_<version>_aarch64.dmg
+gh release create v<version> "Husk-AI_<version>_aarch64.dmg" --title "Husk AI <version>" --notes-file notes.md
+```
+
+`.github/workflows/release.yml` builds every OS but is manual-only until it has been run once
+(Actions tab, "Run workflow"). Windows, Linux and Intel Mac builds come from there.
+
 ## Contracts the shell relies on in the backends
 
 Husk: `HUSK_PORT`, `HUSK_DATA_DIR`, `HUSK_LAUNCH_SECRET`, `HUSK_ENV=prod`, `HUSK_STUDIO_UI_URL`,
