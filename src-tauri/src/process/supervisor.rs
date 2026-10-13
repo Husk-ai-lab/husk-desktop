@@ -229,20 +229,19 @@ mod tests {
         p
     }
 
-    /// Tests run in parallel inside one process and the port is released before the backend binds
-    /// it, so the same number must never be handed to two of them.
+    /// Ports for the tests. They come from below the OS's ephemeral range on purpose: the other
+    /// tests' HTTP clients take their source ports from that range, so an ephemeral number
+    /// handed out here can be in use by the time the backend binds it. A shared counter also
+    /// means two parallel tests never get the same number.
     fn free_port() -> u16 {
-        use std::collections::HashSet;
-        use std::sync::{Mutex, OnceLock};
-        static GIVEN: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
-        let given = GIVEN.get_or_init(Default::default);
+        use std::sync::atomic::{AtomicU16, Ordering};
+        use std::sync::OnceLock;
+        // starts somewhere process-specific so two test runs rarely overlap
+        static NEXT: OnceLock<AtomicU16> = OnceLock::new();
+        let next = NEXT.get_or_init(|| AtomicU16::new((std::process::id() % 8_000) as u16));
         loop {
-            let port = std::net::TcpListener::bind("127.0.0.1:0")
-                .unwrap()
-                .local_addr()
-                .unwrap()
-                .port();
-            if given.lock().unwrap().insert(port) {
+            let port = 20_000 + next.fetch_add(1, Ordering::Relaxed) % 10_000;
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
                 return port;
             }
         }
