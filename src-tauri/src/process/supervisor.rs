@@ -229,12 +229,23 @@ mod tests {
         p
     }
 
+    /// Tests run in parallel inside one process and the port is released before the backend binds
+    /// it, so the same number must never be handed to two of them.
     fn free_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        use std::collections::HashSet;
+        use std::sync::{Mutex, OnceLock};
+        static GIVEN: OnceLock<Mutex<HashSet<u16>>> = OnceLock::new();
+        let given = GIVEN.get_or_init(Default::default);
+        loop {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            if given.lock().unwrap().insert(port) {
+                return port;
+            }
+        }
     }
 
     fn req(exe: PathBuf, port: u16, log: PathBuf, secs: u64) -> StartRequest {

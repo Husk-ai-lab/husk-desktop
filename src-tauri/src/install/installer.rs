@@ -159,12 +159,9 @@ mod tests {
     fn fake_backend_tar_gz() -> Vec<u8> {
         let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         let mut b = tar::Builder::new(gz);
+        let exe_entry = format!("husk-backend/{}", exe_file("husk-backend"));
         for (name, data, mode) in [
-            (
-                "husk-backend/husk-backend",
-                b"#!/bin/sh\nexit 0\n".as_slice(),
-                0o755,
-            ),
+            (exe_entry.as_str(), b"#!/bin/sh\nexit 0\n".as_slice(), 0o755),
             (
                 "husk-backend/_internal/base_library.zip",
                 b"zip".as_slice(),
@@ -336,7 +333,7 @@ mod tests {
         let paths = Paths::new(dir.path().to_path_buf());
         let d = paths.component_dir("husk", "alpha-release");
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("husk-backend"), b"x").unwrap();
+        std::fs::write(d.join(exe_file("husk-backend")), b"x").unwrap();
         assert!(!is_intact(&paths, &HUSK, "alpha-release"));
         // a stray file, even a hidden one, does not make it intact
         std::fs::write(d.join(".bare-executable"), b"").unwrap();
@@ -352,7 +349,7 @@ mod tests {
         let paths = Paths::new(dir.path().to_path_buf());
         let d = paths.component_dir("husk", "1.0.0");
         std::fs::create_dir_all(d.join("_internal")).unwrap();
-        std::fs::write(d.join("husk-backend"), b"x").unwrap();
+        std::fs::write(d.join(exe_file("husk-backend")), b"x").unwrap();
         let client = reqwest::Client::new();
         let inst = Installer {
             paths: &paths,
