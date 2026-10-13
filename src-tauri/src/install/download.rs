@@ -24,7 +24,10 @@ pub async fn download(
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    let mut have = tokio::fs::metadata(part).await.map(|m| m.len()).unwrap_or(0);
+    let mut have = tokio::fs::metadata(part)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
     if have > expected_size {
         // not a prefix of this asset (a different release was being downloaded): start over
         tokio::fs::remove_file(part).await.ok();
@@ -42,7 +45,10 @@ pub async fn download(
         let mut file;
         match status {
             StatusCode::PARTIAL_CONTENT if have > 0 => {
-                file = tokio::fs::OpenOptions::new().append(true).open(part).await?;
+                file = tokio::fs::OpenOptions::new()
+                    .append(true)
+                    .open(part)
+                    .await?;
             }
             s if s.is_success() => {
                 // server ignored the Range header (or this is a fresh download): write from 0
@@ -51,7 +57,9 @@ pub async fn download(
             }
             StatusCode::RANGE_NOT_SATISFIABLE => {
                 tokio::fs::remove_file(part).await.ok();
-                return Err(ShellError::DownloadInvalid("server refused the resume range".into()));
+                return Err(ShellError::DownloadInvalid(
+                    "server refused the resume range".into(),
+                ));
             }
             s => return Err(ShellError::Network(format!("download answered {s}"))),
         }
@@ -103,7 +111,12 @@ pub(crate) mod test_server {
                     .headers()
                     .iter()
                     .find(|h| h.field.equiv("Range"))
-                    .and_then(|h| h.value.as_str().strip_prefix("bytes=").map(|v| v.to_string()));
+                    .and_then(|h| {
+                        h.value
+                            .as_str()
+                            .strip_prefix("bytes=")
+                            .map(|v| v.to_string())
+                    });
                 let (status, data): (u16, Vec<u8>) = match (range, ignore_range) {
                     (Some(r), false) => {
                         let start: usize = r.trim_end_matches('-').parse().unwrap_or(0);
@@ -112,7 +125,9 @@ pub(crate) mod test_server {
                     _ => (200, body.clone()),
                 };
                 let data = match cut_after {
-                    Some(n) if status == 200 || n < data.len() => data[..n.min(data.len())].to_vec(),
+                    Some(n) if status == 200 || n < data.len() => {
+                        data[..n.min(data.len())].to_vec()
+                    }
                     _ => data,
                 };
                 // Content-Length is computed from the data actually sent, so a "cut" is a
@@ -121,7 +136,10 @@ pub(crate) mod test_server {
                 let _ = req.respond(resp);
             }
         });
-        Served { url: format!("http://127.0.0.1:{port}/asset"), _server: server }
+        Served {
+            url: format!("http://127.0.0.1:{port}/asset"),
+            _server: server,
+        }
     }
 }
 
@@ -142,9 +160,15 @@ mod tests {
         let part = dir.path().join("a.part");
         let mut last = (0, 0);
         let mut cb = |d: u64, t: u64| last = (d, t);
-        download(&reqwest::Client::new(), &srv.url, &part, data.len() as u64, &mut cb)
-            .await
-            .unwrap();
+        download(
+            &reqwest::Client::new(),
+            &srv.url,
+            &part,
+            data.len() as u64,
+            &mut cb,
+        )
+        .await
+        .unwrap();
         assert_eq!(std::fs::read(&part).unwrap(), data);
         assert_eq!(last, (data.len() as u64, data.len() as u64));
     }
@@ -157,9 +181,15 @@ mod tests {
         let part = dir.path().join("a.part");
         std::fs::write(&part, &data[..40_000]).unwrap();
         let mut cb = |_: u64, _: u64| {};
-        download(&reqwest::Client::new(), &srv.url, &part, data.len() as u64, &mut cb)
-            .await
-            .unwrap();
+        download(
+            &reqwest::Client::new(),
+            &srv.url,
+            &part,
+            data.len() as u64,
+            &mut cb,
+        )
+        .await
+        .unwrap();
         assert_eq!(std::fs::read(&part).unwrap(), data);
     }
 
@@ -171,9 +201,15 @@ mod tests {
         let part = dir.path().join("a.part");
         std::fs::write(&part, &data[..10_000]).unwrap();
         let mut cb = |_: u64, _: u64| {};
-        download(&reqwest::Client::new(), &srv.url, &part, data.len() as u64, &mut cb)
-            .await
-            .unwrap();
+        download(
+            &reqwest::Client::new(),
+            &srv.url,
+            &part,
+            data.len() as u64,
+            &mut cb,
+        )
+        .await
+        .unwrap();
         assert_eq!(std::fs::read(&part).unwrap(), data);
     }
 
@@ -184,9 +220,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let part = dir.path().join("a.part");
         let mut cb = |_: u64, _: u64| {};
-        let err = download(&reqwest::Client::new(), &srv.url, &part, data.len() as u64, &mut cb)
-            .await
-            .unwrap_err();
+        let err = download(
+            &reqwest::Client::new(),
+            &srv.url,
+            &part,
+            data.len() as u64,
+            &mut cb,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.code(), "download_invalid");
         assert!(!part.exists(), "a bad download must not be kept");
     }
@@ -199,9 +241,15 @@ mod tests {
         let part = dir.path().join("a.part");
         std::fs::write(&part, body(99_999)).unwrap();
         let mut cb = |_: u64, _: u64| {};
-        download(&reqwest::Client::new(), &srv.url, &part, data.len() as u64, &mut cb)
-            .await
-            .unwrap();
+        download(
+            &reqwest::Client::new(),
+            &srv.url,
+            &part,
+            data.len() as u64,
+            &mut cb,
+        )
+        .await
+        .unwrap();
         assert_eq!(std::fs::read(&part).unwrap(), data);
     }
 }

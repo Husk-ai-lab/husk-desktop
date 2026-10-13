@@ -95,10 +95,16 @@ mod tests {
 
     #[test]
     fn husk_pages_are_recognised() {
-        assert!(is_husk_url(&Url::parse("http://127.0.0.1:8765/__shell/husk").unwrap()));
-        assert!(is_husk_url(&Url::parse("http://localhost:8765/discovery").unwrap()));
+        assert!(is_husk_url(
+            &Url::parse("http://127.0.0.1:8765/__shell/husk").unwrap()
+        ));
+        assert!(is_husk_url(
+            &Url::parse("http://localhost:8765/discovery").unwrap()
+        ));
         assert!(!is_husk_url(&Url::parse("http://127.0.0.1:7654/").unwrap()));
-        assert!(!is_husk_url(&Url::parse("https://127.0.0.1:8765/").unwrap()));
+        assert!(!is_husk_url(
+            &Url::parse("https://127.0.0.1:8765/").unwrap()
+        ));
     }
 
     #[test]

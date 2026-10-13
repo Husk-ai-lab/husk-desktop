@@ -47,7 +47,10 @@ pub fn run() {
             let paths = Paths::new(app_data_root(app.handle())?);
             paths.ensure_dirs()?;
             logs::init(&paths);
-            tracing::info!(version = env!("CARGO_PKG_VERSION"), "Husk AI shell starting");
+            tracing::info!(
+                version = env!("CARGO_PKG_VERSION"),
+                "Husk AI shell starting"
+            );
 
             let state = Arc::new(AppState::new(paths)?);
             app.manage(state);

@@ -78,8 +78,10 @@ mod tests {
         let f = t.path().join("config.json");
         assert_eq!(Config::load(&f), Config::default());
 
-        let mut c = Config::default();
-        c.setup_done = true;
+        let mut c = Config {
+            setup_done: true,
+            ..Default::default()
+        };
         c.components.insert(
             "husk".into(),
             InstalledComponent {

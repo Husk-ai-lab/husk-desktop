@@ -84,7 +84,9 @@ impl Supervisor {
                 tracing::error!(component = %req.id, error = %e, "backend failed to start");
                 // PyInstaller's launcher could not find its libraries: the install is broken,
                 // not the backend. Reporting it as such offers "Repair" instead of "Retry".
-                if matches!(e, ShellError::StartExited(..)) && launcher_lost_its_libraries(&req.log, log_from) {
+                if matches!(e, ShellError::StartExited(..))
+                    && launcher_lost_its_libraries(&req.log, log_from)
+                {
                     tracing::error!(component = %req.id, "install is incomplete (PyInstaller cannot load its Python library)");
                     return Err(ShellError::NotInstalled(req.id.clone()));
                 }
@@ -113,7 +115,9 @@ impl Supervisor {
 /// True when the output written since `from` carries PyInstaller's "folder is incomplete" message.
 fn launcher_lost_its_libraries(log: &PathBuf, from: u64) -> bool {
     use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(log) else { return false };
+    let Ok(mut f) = std::fs::File::open(log) else {
+        return false;
+    };
     if f.seek(SeekFrom::Start(from)).is_err() {
         return false;
     }
@@ -126,7 +130,10 @@ fn open_log(path: &PathBuf) -> Result<std::fs::File> {
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p)?;
     }
-    Ok(std::fs::OpenOptions::new().create(true).append(true).open(path)?)
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?)
 }
 
 async fn wait_healthy(
@@ -223,7 +230,11 @@ mod tests {
     }
 
     fn free_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
     }
 
     fn req(exe: PathBuf, port: u16, log: PathBuf, secs: u64) -> StartRequest {
@@ -257,7 +268,9 @@ http.server.HTTPServer(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_for
         let port = free_port();
         let sup = Supervisor::default();
 
-        sup.start(&paths, req(exe, port, paths.log_file("husk"), 15)).await.unwrap();
+        sup.start(&paths, req(exe, port, paths.log_file("husk"), 15))
+            .await
+            .unwrap();
         assert!(sup.is_running("husk").await);
         assert!(!ports::is_free(port), "backend should hold the port");
 
@@ -285,8 +298,14 @@ http.server.HTTPServer(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_for
             .start(&paths, req(exe, free_port(), paths.log_file("husk"), 20))
             .await
             .unwrap_err();
-        assert!(matches!(err, ShellError::StartExited(_, Some(3))), "{err:?}");
-        assert!(started.elapsed() < Duration::from_secs(5), "must not wait for the timeout");
+        assert!(
+            matches!(err, ShellError::StartExited(_, Some(3))),
+            "{err:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "must not wait for the timeout"
+        );
     }
 
     #[tokio::test]
@@ -295,15 +314,29 @@ http.server.HTTPServer(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_for
         let paths = Paths::new(t.path().to_path_buf());
         paths.ensure_dirs().unwrap();
         // an older run already left a line in the shared log; only the new output counts
-        std::fs::write(paths.log_file("husk"), "old run: Failed to load Python shared library\n").unwrap();
-        let exe = script(t.path(), "no-libs", "echo 'Failed to load Python shared library' >&2; exit 255");
+        std::fs::write(
+            paths.log_file("husk"),
+            "old run: Failed to load Python shared library\n",
+        )
+        .unwrap();
+        let exe = script(
+            t.path(),
+            "no-libs",
+            "echo 'Failed to load Python shared library' >&2; exit 255",
+        );
         let sup = Supervisor::default();
-        let err = sup.start(&paths, req(exe, free_port(), paths.log_file("husk"), 20)).await.unwrap_err();
+        let err = sup
+            .start(&paths, req(exe, free_port(), paths.log_file("husk"), 20))
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "not_installed", "{err:?}");
 
         // an ordinary crash with the same old line in the log stays an ordinary crash
         let exe = script(t.path(), "crash", "echo boom >&2; exit 1");
-        let err = sup.start(&paths, req(exe, free_port(), paths.log_file("husk"), 20)).await.unwrap_err();
+        let err = sup
+            .start(&paths, req(exe, free_port(), paths.log_file("husk"), 20))
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "start_exited", "{err:?}");
     }
 
@@ -312,12 +345,21 @@ http.server.HTTPServer(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_for
         let t = tempfile::tempdir().unwrap();
         let paths = Paths::new(t.path().to_path_buf());
         paths.ensure_dirs().unwrap();
-        let exe = script(t.path(), "echoes", &format!("echo \"$1 $2\" > {}/args.txt; exit 3", t.path().display()));
+        let exe = script(
+            t.path(),
+            "echoes",
+            &format!("echo \"$1 $2\" > {}/args.txt; exit 3", t.path().display()),
+        );
         let sup = Supervisor::default();
         let mut r = req(exe, free_port(), paths.log_file("husk"), 20);
         r.args = vec!["--data-dir".into(), "/some/dir".into()];
         let _ = sup.start(&paths, r).await;
-        assert_eq!(std::fs::read_to_string(t.path().join("args.txt")).unwrap().trim(), "--data-dir /some/dir");
+        assert_eq!(
+            std::fs::read_to_string(t.path().join("args.txt"))
+                .unwrap()
+                .trim(),
+            "--data-dir /some/dir"
+        );
     }
 
     #[tokio::test]
@@ -345,7 +387,10 @@ http.server.HTTPServer(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_for
         let port = l.local_addr().unwrap().port();
         let exe = script(t.path(), "never-run", "touch ran.marker");
         let sup = Supervisor::default();
-        let err = sup.start(&paths, req(exe, port, paths.log_file("husk"), 2)).await.unwrap_err();
+        let err = sup
+            .start(&paths, req(exe, port, paths.log_file("husk"), 2))
+            .await
+            .unwrap_err();
         assert!(matches!(err, ShellError::PortBusy(p) if p == port));
         assert!(!t.path().join("ran.marker").exists());
     }

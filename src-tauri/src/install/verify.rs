@@ -53,7 +53,10 @@ impl Verifier for Sha256Verifier {
 /// `sha256:<64 hex>` (any case) -> lowercase hex. Other algorithms, short or non-hex values: `None`.
 fn parse_sha256_digest(digest: &str) -> Option<String> {
     let (algo, hex) = digest.trim().split_once(':')?;
-    if !algo.eq_ignore_ascii_case("sha256") || hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !algo.eq_ignore_ascii_case("sha256")
+        || hex.len() != 64
+        || !hex.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return None;
     }
     Some(hex.to_ascii_lowercase())
@@ -70,7 +73,11 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// Accepts every archive. Tests only: the shell always runs [`Sha256Verifier`].
@@ -86,7 +93,10 @@ impl Verifier for NoopVerifier {
 
 #[cfg(test)]
 pub fn sha256_hex_of(bytes: &[u8]) -> String {
-    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -128,14 +138,23 @@ mod tests {
     #[test]
     fn matching_digest_passes_in_any_case() {
         let (_d, p) = file(b"abc");
-        Sha256Verifier.verify(&p, &release(Some(&format!("sha256:{ABC}")))).unwrap();
-        Sha256Verifier.verify(&p, &release(Some(&format!("SHA256:{}", ABC.to_uppercase())))).unwrap();
+        Sha256Verifier
+            .verify(&p, &release(Some(&format!("sha256:{ABC}"))))
+            .unwrap();
+        Sha256Verifier
+            .verify(
+                &p,
+                &release(Some(&format!("SHA256:{}", ABC.to_uppercase()))),
+            )
+            .unwrap();
     }
 
     #[test]
     fn a_different_file_is_a_mismatch() {
         let (_d, p) = file(b"abd"); // one byte off, same size
-        let err = Sha256Verifier.verify(&p, &release(Some(&format!("sha256:{ABC}")))).unwrap_err();
+        let err = Sha256Verifier
+            .verify(&p, &release(Some(&format!("sha256:{ABC}"))))
+            .unwrap_err();
         assert_eq!(err.code(), "checksum_mismatch");
     }
 
@@ -158,7 +177,10 @@ mod tests {
     #[test]
     fn a_missing_file_is_an_io_error_not_a_pass() {
         let err = Sha256Verifier
-            .verify(Path::new("/nonexistent/archive"), &release(Some(&format!("sha256:{ABC}"))))
+            .verify(
+                Path::new("/nonexistent/archive"),
+                &release(Some(&format!("sha256:{ABC}"))),
+            )
             .unwrap_err();
         assert_eq!(err.code(), "io");
     }

@@ -30,7 +30,10 @@ impl GitHubSource {
             return Ok(None); // repository has no release yet
         }
         if !resp.status().is_success() {
-            return Err(ShellError::Network(format!("GitHub answered {}", resp.status())));
+            return Err(ShellError::Network(format!(
+                "GitHub answered {}",
+                resp.status()
+            )));
         }
         Ok(Some(resp.text().await?))
     }
@@ -64,10 +67,20 @@ fn to_info(spec: &ComponentSpec, r: GhRelease, triple: &str) -> Option<ReleaseIn
     let assets: Vec<Asset> = r
         .assets
         .into_iter()
-        .map(|a| Asset { name: a.name, size: a.size, url: a.browser_download_url, digest: a.digest })
+        .map(|a| Asset {
+            name: a.name,
+            size: a.size,
+            url: a.browser_download_url,
+            digest: a.digest,
+        })
         .collect();
     let asset = select_asset(&assets, spec.asset_prefix, triple)?.clone();
-    Some(ReleaseInfo { component: spec.id.into(), version, prerelease: r.prerelease, asset })
+    Some(ReleaseInfo {
+        component: spec.id.into(),
+        version,
+        prerelease: r.prerelease,
+        asset,
+    })
 }
 
 /// `releases/latest` body -> the release for this machine (stable channel).
@@ -128,29 +141,40 @@ mod tests {
 
     #[test]
     fn parses_latest_for_the_right_triple() {
-        let r = parse_latest(&HUSK, LATEST, "aarch64-apple-darwin").unwrap().unwrap();
+        let r = parse_latest(&HUSK, LATEST, "aarch64-apple-darwin")
+            .unwrap()
+            .unwrap();
         assert_eq!(r.version, "1.4.0");
         assert_eq!(r.asset.size, 98213345);
         assert_eq!(
             r.asset.digest.as_deref(),
             Some("sha256:2d201ef07b21d5652860bce4370faef46e3ff158c205ceedcd9d457880fd2c20")
         );
-        assert!(r.asset.url.starts_with("https://github.com/Husk-ai-lab/HuskAI-core/"));
-        assert!(parse_latest(&HUSK, LATEST, "x86_64-unknown-linux-gnu").unwrap().is_none());
+        assert!(r
+            .asset
+            .url
+            .starts_with("https://github.com/Husk-ai-lab/HuskAI-core/"));
+        assert!(parse_latest(&HUSK, LATEST, "x86_64-unknown-linux-gnu")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn an_asset_without_a_digest_is_parsed_with_none() {
         let body = r#"{"tag_name":"v1.0.0","assets":[
           {"name":"husk-backend-1.0.0-aarch64-apple-darwin.tar.gz","size":5,"browser_download_url":"https://e/a"}]}"#;
-        let r = parse_latest(&HUSK, body, "aarch64-apple-darwin").unwrap().unwrap();
+        let r = parse_latest(&HUSK, body, "aarch64-apple-darwin")
+            .unwrap()
+            .unwrap();
         assert_eq!(r.asset.digest, None);
     }
 
     #[test]
     fn no_matching_asset_means_unavailable() {
         // Studio has no release assets of its own in this fixture
-        assert!(parse_latest(&STUDIO, LATEST, "aarch64-apple-darwin").unwrap().is_none());
+        assert!(parse_latest(&STUDIO, LATEST, "aarch64-apple-darwin")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -162,7 +186,9 @@ mod tests {
           {"tag_name":"v1.4.0","draft":false,"prerelease":false,"assets":[
             {"name":"husk-backend-1.4.0-aarch64-apple-darwin.tar.gz","size":5,"browser_download_url":"https://e/a"}]}
         ]"#;
-        let r = parse_list(&HUSK, body, "aarch64-apple-darwin").unwrap().unwrap();
+        let r = parse_list(&HUSK, body, "aarch64-apple-darwin")
+            .unwrap()
+            .unwrap();
         assert_eq!(r.version, "1.5.0-beta.1");
         assert!(r.prerelease);
     }
@@ -171,6 +197,8 @@ mod tests {
     fn a_hostile_tag_is_rejected_not_used_as_a_path() {
         let body = r#"{"tag_name":"v../../x","assets":[
           {"name":"husk-backend-1-aarch64-apple-darwin.tar.gz","size":1,"browser_download_url":"https://e/a"}]}"#;
-        assert!(parse_latest(&HUSK, body, "aarch64-apple-darwin").unwrap().is_none());
+        assert!(parse_latest(&HUSK, body, "aarch64-apple-darwin")
+            .unwrap()
+            .is_none());
     }
 }

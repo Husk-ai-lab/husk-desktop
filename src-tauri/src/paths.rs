@@ -93,7 +93,9 @@ pub fn is_safe_segment(s: &str) -> bool {
         && s != ".."
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+' | '_'))
-        && Path::new(s).components().all(|c| matches!(c, Component::Normal(_)))
+        && Path::new(s)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
 }
 
 #[cfg(test)]

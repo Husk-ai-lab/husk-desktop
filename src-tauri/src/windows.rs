@@ -2,13 +2,16 @@
 //!   * `main`    — first the shell's own UI (setup / starting / errors), then Husk's page
 //!   * `manager` — the shell's own UI again: components, updates, logs
 //!   * `studio`  — Husk Studio's page, in its own window on its own local endpoint
+//!
 //! Only `main` and `manager` have IPC (see capabilities/default.json), and `main` loses it the
 //! moment it navigates to the backend, because the capability only matches the bundled UI.
 
 use std::sync::OnceLock;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
+use tauri::{
+    AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
+};
 
 use crate::app::{locale, open_studio_window, state_of};
 use crate::config::{HUSK_PORT, STUDIO_PORT};
@@ -93,13 +96,17 @@ pub fn show_manager_tab(app: &AppHandle, tab: &str) -> Result<()> {
         w.set_focus().map_err(werr)?;
         return Ok(());
     }
-    WebviewWindowBuilder::new(app, "manager", WebviewUrl::App(format!("index.html#{tab}").into()))
-        .title(tr("Husk AI — installation", "Husk AI — installazione"))
-        .inner_size(1000.0, 680.0)
-        .min_inner_size(820.0, 520.0)
-        .center()
-        .build()
-        .map_err(werr)?;
+    WebviewWindowBuilder::new(
+        app,
+        "manager",
+        WebviewUrl::App(format!("index.html#{tab}").into()),
+    )
+    .title(tr("Husk AI — installation", "Husk AI — installazione"))
+    .inner_size(1000.0, 680.0)
+    .min_inner_size(820.0, 520.0)
+    .center()
+    .build()
+    .map_err(werr)?;
     Ok(())
 }
 
@@ -149,7 +156,9 @@ fn back_button_script(label: &str) -> String {
 
 /// Studio gets its own window on its own endpoint, with no IPC at all.
 pub fn show_studio(app: &AppHandle, url: Option<Url>) -> Result<()> {
-    let url = url.unwrap_or_else(|| Url::parse(&format!("http://127.0.0.1:{STUDIO_PORT}/")).expect("static url"));
+    let url = url.unwrap_or_else(|| {
+        Url::parse(&format!("http://127.0.0.1:{STUDIO_PORT}/")).expect("static url")
+    });
     if let Some(w) = app.get_webview_window("studio") {
         w.show().map_err(werr)?;
         w.set_focus().map_err(werr)?;
@@ -212,14 +221,39 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         Some("CmdOrCtrl+Shift+H"),
     )?;
-    let open_studio = MenuItem::with_id(app, "open_studio", tr("Open Husk Studio", "Apri Husk Studio"), true, None::<&str>)?;
-    let manager = MenuItem::with_id(app, "manager", tr("Manage installation…", "Gestisci installazione…"), true, None::<&str>)?;
-    let update = MenuItem::with_id(app, "update", tr("Check for updates…", "Cerca aggiornamenti…"), true, None::<&str>)?;
-    let logs = MenuItem::with_id(app, "logs", tr("View logs…", "Visualizza log…"), true, None::<&str>)?;
+    let open_studio = MenuItem::with_id(
+        app,
+        "open_studio",
+        tr("Open Husk Studio", "Apri Husk Studio"),
+        true,
+        None::<&str>,
+    )?;
+    let manager = MenuItem::with_id(
+        app,
+        "manager",
+        tr("Manage installation…", "Gestisci installazione…"),
+        true,
+        None::<&str>,
+    )?;
+    let update = MenuItem::with_id(
+        app,
+        "update",
+        tr("Check for updates…", "Cerca aggiornamenti…"),
+        true,
+        None::<&str>,
+    )?;
+    let logs = MenuItem::with_id(
+        app,
+        "logs",
+        tr("View logs…", "Visualizza log…"),
+        true,
+        None::<&str>,
+    )?;
     let _ = UPDATE_ITEM.set(update.clone());
     let sep = PredefinedMenuItem::separator(app)?;
 
-    let mut husk_items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = vec![&back_to_husk, &open_studio, &manager, &update, &logs];
+    let mut husk_items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> =
+        vec![&back_to_husk, &open_studio, &manager, &update, &logs];
     let quit = PredefinedMenuItem::quit(app, Some(tr("Quit Husk AI", "Esci da Husk AI")))?;
     if !cfg!(target_os = "macos") {
         husk_items.push(&sep);
@@ -256,7 +290,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             true,
             &[&about, &sep3, &hide, &hide_others, &show_all, &sep4, &quit],
         )?;
-        return Menu::with_items(app, &[&app_menu, &husk_menu, &edit_menu]);
+        Menu::with_items(app, &[&app_menu, &husk_menu, &edit_menu])
     }
     #[cfg(not(target_os = "macos"))]
     Menu::with_items(app, &[&husk_menu, &edit_menu])
@@ -308,7 +342,11 @@ mod tests {
 
     #[test]
     fn studio_window_keeps_its_own_pages_and_sends_web_links_out() {
-        assert!(studio_nav_allowed(&Url::parse("http://127.0.0.1:7654/runs/1").unwrap()));
-        assert!(!studio_nav_allowed(&Url::parse("file:///etc/passwd").unwrap()));
+        assert!(studio_nav_allowed(
+            &Url::parse("http://127.0.0.1:7654/runs/1").unwrap()
+        ));
+        assert!(!studio_nav_allowed(
+            &Url::parse("file:///etc/passwd").unwrap()
+        ));
     }
 }

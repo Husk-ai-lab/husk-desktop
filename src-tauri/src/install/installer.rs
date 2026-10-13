@@ -29,7 +29,9 @@ pub struct Installer<'a> {
 
 /// Path of the executable of an installed version (not checked for existence).
 pub fn exe_path(paths: &Paths, spec: &ComponentSpec, version: &str) -> PathBuf {
-    paths.component_dir(spec.id, version).join(exe_file(spec.exe_name))
+    paths
+        .component_dir(spec.id, version)
+        .join(exe_file(spec.exe_name))
 }
 
 /// "Ripara installazione" trigger: the executable must be there and so must the Python library
@@ -84,7 +86,10 @@ impl Installer<'_> {
         }
 
         progress(Phase::Extracting, 0, 0);
-        let tmp = self.paths.component_root(spec.id).join(format!("{}.tmp", rel.version));
+        let tmp = self
+            .paths
+            .component_root(spec.id)
+            .join(format!("{}.tmp", rel.version));
         let exe = exe_file(spec.exe_name);
         let (archive2, tmp2, dest2) = (archive.clone(), tmp.clone(), dest.clone());
         let placed = tokio::task::spawn_blocking(move || place(&archive2, &tmp2, &dest2, &exe))
@@ -132,7 +137,9 @@ fn place(archive: &Path, tmp: &Path, dest: &Path, exe: &str) -> Result<()> {
 
 /// Delete every version directory of a component except the ones in `keep`.
 pub fn prune_versions(paths: &Paths, id: &str, keep: &[&str]) {
-    let Ok(rd) = std::fs::read_dir(paths.component_root(id)) else { return };
+    let Ok(rd) = std::fs::read_dir(paths.component_root(id)) else {
+        return;
+    };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if !keep.contains(&name.as_str()) {
@@ -153,8 +160,16 @@ mod tests {
         let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         let mut b = tar::Builder::new(gz);
         for (name, data, mode) in [
-            ("husk-backend/husk-backend", b"#!/bin/sh\nexit 0\n".as_slice(), 0o755),
-            ("husk-backend/_internal/base_library.zip", b"zip".as_slice(), 0o644),
+            (
+                "husk-backend/husk-backend",
+                b"#!/bin/sh\nexit 0\n".as_slice(),
+                0o755,
+            ),
+            (
+                "husk-backend/_internal/base_library.zip",
+                b"zip".as_slice(),
+                0o644,
+            ),
         ] {
             let mut h = tar::Header::new_gnu();
             h.set_size(data.len() as u64);
@@ -170,7 +185,12 @@ mod tests {
             component: "husk".into(),
             version: "1.0.0".into(),
             prerelease: false,
-            asset: Asset { name: "husk-backend-1.0.0-test.tar.gz".into(), size, url, digest: None },
+            asset: Asset {
+                name: "husk-backend-1.0.0-test.tar.gz".into(),
+                size,
+                url,
+                digest: None,
+            },
         }
     }
 
@@ -181,18 +201,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path().to_path_buf());
         let client = reqwest::Client::new();
-        let inst = Installer { paths: &paths, client: &client, verifier: &NoopVerifier };
+        let inst = Installer {
+            paths: &paths,
+            client: &client,
+            verifier: &NoopVerifier,
+        };
 
         let mut phases = Vec::new();
-        inst.install(&HUSK, &release(srv.url.clone(), archive.len() as u64), &mut |p, _, _| {
-            if phases.last() != Some(&p) {
-                phases.push(p);
-            }
-        })
+        inst.install(
+            &HUSK,
+            &release(srv.url.clone(), archive.len() as u64),
+            &mut |p, _, _| {
+                if phases.last() != Some(&p) {
+                    phases.push(p);
+                }
+            },
+        )
         .await
         .unwrap();
 
-        assert_eq!(phases, vec![Phase::Downloading, Phase::Extracting, Phase::Finalizing]);
+        assert_eq!(
+            phases,
+            vec![Phase::Downloading, Phase::Extracting, Phase::Finalizing]
+        );
         assert!(exe_path(&paths, &HUSK, "1.0.0").is_file());
         assert!(is_intact(&paths, &HUSK, "1.0.0"));
         assert!(!paths.component_root("husk").join("1.0.0.tmp").exists());
@@ -211,7 +242,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path().to_path_buf());
         let client = reqwest::Client::new();
-        let inst = Installer { paths: &paths, client: &client, verifier: &Sha256Verifier };
+        let inst = Installer {
+            paths: &paths,
+            client: &client,
+            verifier: &Sha256Verifier,
+        };
 
         let rel = with_digest(release(srv.url.clone(), archive.len() as u64), &archive);
         inst.install(&HUSK, &rel, &mut |_, _, _| {}).await.unwrap();
@@ -228,10 +263,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path().to_path_buf());
         let client = reqwest::Client::new();
-        let inst = Installer { paths: &paths, client: &client, verifier: &Sha256Verifier };
+        let inst = Installer {
+            paths: &paths,
+            client: &client,
+            verifier: &Sha256Verifier,
+        };
 
         let rel = with_digest(release(srv.url.clone(), archive.len() as u64), &archive);
-        let err = inst.install(&HUSK, &rel, &mut |_, _, _| {}).await.unwrap_err();
+        let err = inst
+            .install(&HUSK, &rel, &mut |_, _, _| {})
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "checksum_mismatch");
         assert!(!paths.component_dir("husk", "1.0.0").exists());
         assert!(!paths.component_root("husk").join("1.0.0.tmp").exists());
@@ -245,10 +287,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path().to_path_buf());
         let client = reqwest::Client::new();
-        let inst = Installer { paths: &paths, client: &client, verifier: &Sha256Verifier };
+        let inst = Installer {
+            paths: &paths,
+            client: &client,
+            verifier: &Sha256Verifier,
+        };
 
         let rel = release(srv.url.clone(), archive.len() as u64); // digest: None
-        let err = inst.install(&HUSK, &rel, &mut |_, _, _| {}).await.unwrap_err();
+        let err = inst
+            .install(&HUSK, &rel, &mut |_, _, _| {})
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), "no_checksum");
         assert!(!paths.component_dir("husk", "1.0.0").exists());
         assert_eq!(std::fs::read_dir(paths.downloads_dir()).unwrap().count(), 0);
@@ -261,10 +310,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path().to_path_buf());
         let client = reqwest::Client::new();
-        let inst = Installer { paths: &paths, client: &client, verifier: &NoopVerifier };
+        let inst = Installer {
+            paths: &paths,
+            client: &client,
+            verifier: &NoopVerifier,
+        };
 
         let err = inst
-            .install(&HUSK, &release(srv.url.clone(), junk.len() as u64), &mut |_, _, _| {})
+            .install(
+                &HUSK,
+                &release(srv.url.clone(), junk.len() as u64),
+                &mut |_, _, _| {},
+            )
             .await
             .unwrap_err();
         assert_eq!(err.code(), "download_invalid");
@@ -297,11 +354,19 @@ mod tests {
         std::fs::create_dir_all(d.join("_internal")).unwrap();
         std::fs::write(d.join("husk-backend"), b"x").unwrap();
         let client = reqwest::Client::new();
-        let inst = Installer { paths: &paths, client: &client, verifier: &NoopVerifier };
+        let inst = Installer {
+            paths: &paths,
+            client: &client,
+            verifier: &NoopVerifier,
+        };
         // the URL is unreachable: success proves nothing was fetched
-        inst.install(&HUSK, &release("http://127.0.0.1:1/x".into(), 5), &mut |_, _, _| {})
-            .await
-            .unwrap();
+        inst.install(
+            &HUSK,
+            &release("http://127.0.0.1:1/x".into(), 5),
+            &mut |_, _, _| {},
+        )
+        .await
+        .unwrap();
     }
 
     #[test]

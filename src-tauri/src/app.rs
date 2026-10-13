@@ -9,14 +9,17 @@ use rand::RngCore;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::config::{self, ComponentSpec, COMPONENTS, HEALTH_TIMEOUT, HUSK, HUSK_PORT, STUDIO, STUDIO_MCP_PORT, STUDIO_PORT};
+use crate::config::{
+    self, ComponentSpec, COMPONENTS, HEALTH_TIMEOUT, HUSK, HUSK_PORT, STUDIO, STUDIO_MCP_PORT,
+    STUDIO_PORT,
+};
 use crate::error::{Result, ShellError};
 use crate::install::installer::{exe_path, is_intact, prune_versions, Installer, Phase};
 use crate::install::verify::{Sha256Verifier, Verifier};
 use crate::logs;
 use crate::paths::Paths;
-use crate::process::supervisor::{StartRequest, Supervisor};
 use crate::process::reaper;
+use crate::process::supervisor::{StartRequest, Supervisor};
 use crate::release::github::GitHubSource;
 use crate::release::{is_newer, ReleaseInfo, ReleaseSource};
 use crate::state::{Config, InstalledComponent};
@@ -77,7 +80,11 @@ impl AppState {
     }
 
     fn installer(&self) -> Installer<'_> {
-        Installer { paths: &self.paths, client: &self.client, verifier: self.verifier.as_ref() }
+        Installer {
+            paths: &self.paths,
+            client: &self.client,
+            verifier: self.verifier.as_ref(),
+        }
     }
 }
 
@@ -144,7 +151,9 @@ fn known(id: &str) -> Result<&'static ComponentSpec> {
 // ---------------------------------------------------------------- commands
 
 #[tauri::command]
-pub async fn get_state(state: State<'_, Arc<AppState>>) -> std::result::Result<StateView, ShellError> {
+pub async fn get_state(
+    state: State<'_, Arc<AppState>>,
+) -> std::result::Result<StateView, ShellError> {
     let cfg = state.cfg();
     let updates = state.updates.lock().unwrap().clone();
     let mut components = Vec::new();
@@ -156,19 +165,27 @@ pub async fn get_state(state: State<'_, Arc<AppState>>) -> std::result::Result<S
             required: spec.required,
             recommended: spec.recommended,
             installed_version: inst.map(|i| i.version.clone()),
-            intact: inst.map(|i| is_intact(&state.paths, spec, &i.version)).unwrap_or(false),
+            intact: inst
+                .map(|i| is_intact(&state.paths, spec, &i.version))
+                .unwrap_or(false),
             previous_version: inst.and_then(|i| i.previous_version.clone()),
             pending_confirm: inst.map(|i| i.pending_confirm).unwrap_or(false),
             running: state.supervisor.is_running(spec.id).await,
             update_version: updates.get(spec.id).map(|r| r.version.clone()),
         });
     }
-    Ok(StateView { setup_done: cfg.setup_done, components, locale: locale() })
+    Ok(StateView {
+        setup_done: cfg.setup_done,
+        components,
+        locale: locale(),
+    })
 }
 
 /// What could be installed right now, with download sizes, for the first-run screen.
 #[tauri::command]
-pub async fn check_releases(state: State<'_, Arc<AppState>>) -> std::result::Result<Vec<Availability>, ShellError> {
+pub async fn check_releases(
+    state: State<'_, Arc<AppState>>,
+) -> std::result::Result<Vec<Availability>, ShellError> {
     let channel = state.cfg().channel;
     let lookups = COMPONENTS.iter().map(|spec| {
         let source = state.source.clone();
@@ -185,8 +202,20 @@ pub async fn check_releases(state: State<'_, Arc<AppState>>) -> std::result::Res
                 unavailable: false,
                 error: None,
             },
-            Ok(None) => Availability { id: spec.id, version: None, size: None, unavailable: true, error: None },
-            Err(e) => Availability { id: spec.id, version: None, size: None, unavailable: false, error: Some(e) },
+            Ok(None) => Availability {
+                id: spec.id,
+                version: None,
+                size: None,
+                unavailable: true,
+                error: None,
+            },
+            Err(e) => Availability {
+                id: spec.id,
+                version: None,
+                size: None,
+                unavailable: false,
+                error: Some(e),
+            },
         })
         .collect())
 }
@@ -205,8 +234,16 @@ pub async fn install(
     // apply_update, which keeps the previous version for rollback).
     let cfg = state.cfg();
     let mut specs: Vec<&'static ComponentSpec> = Vec::new();
-    for spec in std::iter::once(&HUSK).chain(components.iter().map(|id| known(id)).collect::<Result<Vec<_>>>()?) {
-        let installed = cfg.installed(spec.id).map(|i| is_intact(&state.paths, spec, &i.version)).unwrap_or(false);
+    for spec in std::iter::once(&HUSK).chain(
+        components
+            .iter()
+            .map(|id| known(id))
+            .collect::<Result<Vec<_>>>()?,
+    ) {
+        let installed = cfg
+            .installed(spec.id)
+            .map(|i| is_intact(&state.paths, spec, &i.version))
+            .unwrap_or(false);
         if !installed && !specs.iter().any(|x| x.id == spec.id) {
             specs.push(spec);
         }
@@ -241,20 +278,31 @@ async fn install_one(
     let mut last_pct = -1i64;
     let app2 = app.clone();
     let mut progress = move |phase: Phase, d: u64, t: u64| {
-        let pct = if t > 0 { (d * 100 / t) as i64 } else { -1 };
+        let pct = (d * 100).checked_div(t).map_or(-1, |p| p as i64);
         // one event per percent, not per network chunk
         if phase == Phase::Downloading && pct == last_pct {
             return;
         }
         last_pct = pct;
-        let _ = app2.emit("shell://install", InstallEvent { component: id, phase, downloaded: d, total: t });
+        let _ = app2.emit(
+            "shell://install",
+            InstallEvent {
+                component: id,
+                phase,
+                downloaded: d,
+                total: t,
+            },
+        );
     };
     state.installer().install(spec, rel, &mut progress).await?;
 
     // config.json is written last: a crash before this line leaves the component "not installed".
     state.update_config(|c| {
         let old = c.components.get(id).cloned();
-        let previous = old.as_ref().filter(|o| o.version != rel.version).map(|o| o.version.clone());
+        let previous = old
+            .as_ref()
+            .filter(|o| o.version != rel.version)
+            .map(|o| o.version.clone());
         c.components.insert(
             id.to_string(),
             InstalledComponent {
@@ -271,14 +319,26 @@ async fn install_one(
 fn husk_env(state: &AppState, studio_up: bool) -> Vec<(String, String)> {
     let mut env = vec![
         ("HUSK_PORT".into(), HUSK_PORT.to_string()),
-        ("HUSK_DATA_DIR".into(), state.paths.data_dir("husk").display().to_string()),
+        (
+            "HUSK_DATA_DIR".into(),
+            state.paths.data_dir("husk").display().to_string(),
+        ),
         ("HUSK_LAUNCH_SECRET".into(), state.launch_secret.clone()),
         ("HUSK_ENV".into(), "prod".into()),
     ];
     if studio_up {
-        env.push(("HUSK_STUDIO_UI_URL".into(), format!("http://127.0.0.1:{STUDIO_PORT}")));
-        env.push(("HUSK_STUDIO_OTLP_URL".into(), format!("http://127.0.0.1:{STUDIO_PORT}")));
-        env.push(("HUSK_STUDIO_MCP_URL".into(), format!("http://127.0.0.1:{STUDIO_MCP_PORT}/mcp")));
+        env.push((
+            "HUSK_STUDIO_UI_URL".into(),
+            format!("http://127.0.0.1:{STUDIO_PORT}"),
+        ));
+        env.push((
+            "HUSK_STUDIO_OTLP_URL".into(),
+            format!("http://127.0.0.1:{STUDIO_PORT}"),
+        ));
+        env.push((
+            "HUSK_STUDIO_MCP_URL".into(),
+            format!("http://127.0.0.1:{STUDIO_MCP_PORT}/mcp"),
+        ));
     }
     env
 }
@@ -292,7 +352,10 @@ fn studio_env(state: &AppState) -> Vec<(String, String)> {
         ("HUSK_LAUNCH_SECRET".into(), state.launch_secret.clone()),
         ("HUSK_ENV".into(), "prod".into()),
         ("HUSK_NO_BROWSER".into(), "1".into()), // the shell shows Studio in its own window
-        ("STUDIO_TOKEN_URL".into(), format!("http://127.0.0.1:{HUSK_PORT}/internal/studio-token")),
+        (
+            "STUDIO_TOKEN_URL".into(),
+            format!("http://127.0.0.1:{HUSK_PORT}/internal/studio-token"),
+        ),
     ]
 }
 
@@ -315,13 +378,25 @@ fn launch_args(spec: &ComponentSpec, data: &std::path::Path) -> Vec<String> {
     }
 }
 
-async fn start_component(state: &AppState, spec: &ComponentSpec, version: &str, studio_up: bool) -> Result<()> {
+async fn start_component(
+    state: &AppState,
+    spec: &ComponentSpec,
+    version: &str,
+    studio_up: bool,
+) -> Result<()> {
     let exe = exe_path(&state.paths, spec, version);
     // The shell only runs what it installed under bin/.
-    let exe = state.paths.assert_executable_in_bin(&exe).map_err(|_| ShellError::NotInstalled(spec.id.into()))?;
+    let exe = state
+        .paths
+        .assert_executable_in_bin(&exe)
+        .map_err(|_| ShellError::NotInstalled(spec.id.into()))?;
     let data = state.paths.data_dir(spec.id);
     std::fs::create_dir_all(&data)?;
-    let env = if spec.id == "husk" { husk_env(state, studio_up) } else { studio_env(state) };
+    let env = if spec.id == "husk" {
+        husk_env(state, studio_up)
+    } else {
+        studio_env(state)
+    };
     let args = launch_args(spec, &data);
     state
         .supervisor
@@ -343,7 +418,10 @@ async fn start_component(state: &AppState, spec: &ComponentSpec, version: &str, 
 
 /// Start Studio (if installed) then Husk, and point the main window at Husk.
 #[tauri::command]
-pub async fn launch(app: AppHandle, state: State<'_, Arc<AppState>>) -> std::result::Result<(), ShellError> {
+pub async fn launch(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> std::result::Result<(), ShellError> {
     let state = state.inner().clone();
     let _guard = state.op_lock.lock().await;
     let _ = app.emit("shell://launch", LaunchEvent { step: "preparing" });
@@ -362,11 +440,16 @@ pub async fn launch(app: AppHandle, state: State<'_, Arc<AppState>>) -> std::res
 
     // Studio is a development aid: its failure never blocks Husk.
     let mut studio_up = false;
-    if let Some(st) = cfg.installed("studio").filter(|i| is_intact(&state.paths, &STUDIO, &i.version)) {
+    if let Some(st) = cfg
+        .installed("studio")
+        .filter(|i| is_intact(&state.paths, &STUDIO, &i.version))
+    {
         let _ = app.emit("shell://launch", LaunchEvent { step: "studio" });
         match start_component(&state, &STUDIO, &st.version, false).await {
             Ok(()) => studio_up = true,
-            Err(e) => tracing::warn!(error = %e, "Husk Studio did not start; continuing without it"),
+            Err(e) => {
+                tracing::warn!(error = %e, "Husk Studio did not start; continuing without it")
+            }
         }
     }
 
@@ -381,10 +464,18 @@ pub async fn launch(app: AppHandle, state: State<'_, Arc<AppState>>) -> std::res
                 state.update_config(|c| {
                     c.components.insert(
                         "husk".into(),
-                        InstalledComponent { version: prev.clone(), previous_version: None, pending_confirm: false },
+                        InstalledComponent {
+                            version: prev.clone(),
+                            previous_version: None,
+                            pending_confirm: false,
+                        },
                     );
                 })?;
-                current = InstalledComponent { version: prev, previous_version: None, pending_confirm: false };
+                current = InstalledComponent {
+                    version: prev,
+                    previous_version: None,
+                    pending_confirm: false,
+                };
                 result = start_component(&state, &HUSK, &current.version, studio_up).await;
             }
         }
@@ -400,7 +491,14 @@ pub async fn launch(app: AppHandle, state: State<'_, Arc<AppState>>) -> std::res
             i.pending_confirm = false;
         }
     })?;
-    prune_versions(&state.paths, "husk", &[&current.version, current.previous_version.as_deref().unwrap_or("")]);
+    prune_versions(
+        &state.paths,
+        "husk",
+        &[
+            &current.version,
+            current.previous_version.as_deref().unwrap_or(""),
+        ],
+    );
 
     let _ = app.emit("shell://launch", LaunchEvent { step: "opening" });
     windows::show_husk(&app)?;
@@ -420,7 +518,9 @@ async fn refresh_updates(state: &Arc<AppState>) -> usize {
     let cfg = state.cfg();
     let mut found = HashMap::new();
     for spec in COMPONENTS.iter() {
-        let Some(inst) = cfg.installed(spec.id) else { continue };
+        let Some(inst) = cfg.installed(spec.id) else {
+            continue;
+        };
         match state.source.latest(spec, cfg.channel).await {
             Ok(Some(rel)) if is_newer(&rel.version, &inst.version) => {
                 found.insert(spec.id.to_string(), rel);
@@ -435,7 +535,10 @@ async fn refresh_updates(state: &Arc<AppState>) -> usize {
 }
 
 #[tauri::command]
-pub async fn check_updates(app: AppHandle, state: State<'_, Arc<AppState>>) -> std::result::Result<usize, ShellError> {
+pub async fn check_updates(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> std::result::Result<usize, ShellError> {
     let n = refresh_updates(state.inner()).await;
     windows::set_update_badge(&app, n);
     Ok(n)
@@ -474,7 +577,11 @@ pub async fn repair(
     let spec = known(&component)?;
     let _guard = state.op_lock.lock().await;
     let channel = state.cfg().channel;
-    let rel = state.source.latest(spec, channel).await?.ok_or_else(|| ShellError::NoRelease(spec.id.into()))?;
+    let rel = state
+        .source
+        .latest(spec, channel)
+        .await?
+        .ok_or_else(|| ShellError::NoRelease(spec.id.into()))?;
     // the broken folder of the installed version is removed so the install starts clean
     if let Some(i) = state.cfg().installed(spec.id) {
         state.supervisor.stop(&state.paths, spec.id).await;
@@ -484,12 +591,17 @@ pub async fn repair(
 }
 
 #[tauri::command]
-pub async fn rollback(state: State<'_, Arc<AppState>>, component: String) -> std::result::Result<(), ShellError> {
+pub async fn rollback(
+    state: State<'_, Arc<AppState>>,
+    component: String,
+) -> std::result::Result<(), ShellError> {
     let state = state.inner().clone();
     let spec = known(&component)?;
     let _guard = state.op_lock.lock().await;
     let cfg = state.cfg();
-    let inst = cfg.installed(spec.id).ok_or_else(|| ShellError::NotInstalled(spec.id.into()))?;
+    let inst = cfg
+        .installed(spec.id)
+        .ok_or_else(|| ShellError::NotInstalled(spec.id.into()))?;
     let prev = inst
         .previous_version
         .clone()
@@ -498,14 +610,21 @@ pub async fn rollback(state: State<'_, Arc<AppState>>, component: String) -> std
     state.update_config(|c| {
         c.components.insert(
             spec.id.into(),
-            InstalledComponent { version: prev, previous_version: None, pending_confirm: false },
+            InstalledComponent {
+                version: prev,
+                previous_version: None,
+                pending_confirm: false,
+            },
         );
     })?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn remove_component(state: State<'_, Arc<AppState>>, component: String) -> std::result::Result<(), ShellError> {
+pub async fn remove_component(
+    state: State<'_, Arc<AppState>>,
+    component: String,
+) -> std::result::Result<(), ShellError> {
     let state = state.inner().clone();
     let spec = known(&component)?;
     if spec.required {
@@ -523,13 +642,19 @@ pub async fn remove_component(state: State<'_, Arc<AppState>>, component: String
 
 /// Stop the backends and relaunch the shell (applies a pending update or rollback).
 #[tauri::command]
-pub async fn restart(app: AppHandle, state: State<'_, Arc<AppState>>) -> std::result::Result<(), ShellError> {
+pub async fn restart(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> std::result::Result<(), ShellError> {
     state.supervisor.stop_all(&state.paths).await;
     app.restart()
 }
 
 #[tauri::command]
-pub async fn open_studio(app: AppHandle, state: State<'_, Arc<AppState>>) -> std::result::Result<(), ShellError> {
+pub async fn open_studio(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> std::result::Result<(), ShellError> {
     open_studio_window(&app, state.inner()).await
 }
 
@@ -549,7 +674,11 @@ pub fn read_log(state: State<'_, Arc<AppState>>, name: String) -> String {
 /// Menu / command entry point for "Apri Husk Studio".
 pub async fn open_studio_window(app: &AppHandle, state: &Arc<AppState>) -> Result<()> {
     let cfg = state.cfg();
-    let Some(st) = cfg.installed("studio").filter(|i| is_intact(&state.paths, &STUDIO, &i.version)).cloned() else {
+    let Some(st) = cfg
+        .installed("studio")
+        .filter(|i| is_intact(&state.paths, &STUDIO, &i.version))
+        .cloned()
+    else {
         // not installed: send the user to the place where it can be added
         return windows::show_manager(app);
     };
@@ -574,7 +703,14 @@ mod launch_args_tests {
         assert_eq!(launch_args(&HUSK, d), ["--data-dir", "/data/husk"]);
         assert_eq!(
             launch_args(&STUDIO, d),
-            ["start", "--port", "7654", "--host", "127.0.0.1", "--no-open-browser"]
+            [
+                "start",
+                "--port",
+                "7654",
+                "--host",
+                "127.0.0.1",
+                "--no-open-browser"
+            ]
         );
     }
 }

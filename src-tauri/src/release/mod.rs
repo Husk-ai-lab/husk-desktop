@@ -75,7 +75,10 @@ pub fn select_asset<'a>(assets: &'a [Asset], prefix: &str, triple: &str) -> Opti
 /// Newer-than comparison used by the update check. An unparseable candidate never counts as
 /// newer; a real version does replace an installed non-version tag such as `alpha-release`.
 pub fn is_newer(candidate: &str, installed: &str) -> bool {
-    match (semver::Version::parse(candidate), semver::Version::parse(installed)) {
+    match (
+        semver::Version::parse(candidate),
+        semver::Version::parse(installed),
+    ) {
         (Ok(c), Ok(i)) => c > i,
         (Ok(_), Err(_)) => true,
         _ => false,
@@ -87,7 +90,12 @@ mod tests {
     use super::*;
 
     fn asset(name: &str) -> Asset {
-        Asset { name: name.into(), size: 10, url: format!("https://x/{name}"), digest: None }
+        Asset {
+            name: name.into(),
+            size: 10,
+            url: format!("https://x/{name}"),
+            digest: None,
+        }
     }
 
     #[test]

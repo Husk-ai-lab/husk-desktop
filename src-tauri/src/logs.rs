@@ -39,7 +39,9 @@ pub fn tail(paths: &Paths, name: &str, max_bytes: u64) -> String {
     } else {
         Some(paths.log_file(name))
     };
-    let Some(file) = file else { return String::new() };
+    let Some(file) = file else {
+        return String::new();
+    };
     read_tail(&file, max_bytes)
 }
 
@@ -53,7 +55,9 @@ fn newest_with_prefix(dir: &Path, prefix: &str) -> Option<std::path::PathBuf> {
 }
 
 fn read_tail(path: &Path, max_bytes: u64) -> String {
-    let Ok(mut f) = std::fs::File::open(path) else { return String::new() };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return String::new();
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let start = len.saturating_sub(max_bytes);
     if f.seek(SeekFrom::Start(start)).is_err() {
@@ -63,7 +67,9 @@ fn read_tail(path: &Path, max_bytes: u64) -> String {
     f.take(max_bytes).read_to_end(&mut buf).ok();
     let text = String::from_utf8_lossy(&buf).into_owned();
     if start > 0 {
-        text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default()
+        text.split_once('\n')
+            .map(|(_, rest)| rest.to_string())
+            .unwrap_or_default()
     } else {
         text
     }
@@ -79,7 +85,10 @@ mod tests {
         let paths = Paths::new(t.path().to_path_buf());
         paths.ensure_dirs().unwrap();
         std::fs::write(paths.log_file("husk"), "line one\nline two\nline three\n").unwrap();
-        assert_eq!(tail(&paths, "husk", 1000), "line one\nline two\nline three\n");
+        assert_eq!(
+            tail(&paths, "husk", 1000),
+            "line one\nline two\nline three\n"
+        );
         assert_eq!(tail(&paths, "husk", 16), "line three\n");
         assert_eq!(tail(&paths, "../../etc/passwd", 100), "");
         assert_eq!(tail(&paths, "studio", 100), "");

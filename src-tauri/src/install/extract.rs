@@ -9,12 +9,17 @@ use crate::error::{Result, ShellError};
 use crate::platform::{archive_kind, ArchiveKind};
 
 pub fn extract(archive: &Path, dest: &Path) -> Result<()> {
-    let name = archive.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    let name = archive
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
     fs::create_dir_all(dest)?;
     match archive_kind(name) {
         Some(ArchiveKind::TarGz) => extract_tar_gz(archive, dest),
         Some(ArchiveKind::Zip) => extract_zip(archive, dest),
-        None => Err(ShellError::Extract(format!("unsupported archive type: {name}"))),
+        None => Err(ShellError::Extract(format!(
+            "unsupported archive type: {name}"
+        ))),
     }
 }
 
@@ -129,12 +134,17 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<()> {
             let mut link = String::new();
             io::Read::read_to_string(&mut entry, &mut link).map_err(|e| bad(e.to_string()))?;
             if !symlink_stays_inside(dest, &target, Path::new(&link)) {
-                return Err(bad(format!("symlink {} points outside the archive", rel.display())));
+                return Err(bad(format!(
+                    "symlink {} points outside the archive",
+                    rel.display()
+                )));
             }
             #[cfg(unix)]
             std::os::unix::fs::symlink(&link, &target)?;
             #[cfg(not(unix))]
-            return Err(bad("symlinks in zip archives are not supported on this platform"));
+            return Err(bad(
+                "symlinks in zip archives are not supported on this platform",
+            ));
         } else {
             let mut out = fs::File::create(&target)?;
             io::copy(&mut entry, &mut out)?;
@@ -199,11 +209,17 @@ mod tests {
         );
         let out = t.path().join("out");
         extract(&a, &out).unwrap();
-        assert_eq!(fs::read(out.join("husk-backend/_internal/lib.txt")).unwrap(), b"data");
+        assert_eq!(
+            fs::read(out.join("husk-backend/_internal/lib.txt")).unwrap(),
+            b"data"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let m = fs::metadata(out.join("husk-backend/husk-backend")).unwrap().permissions().mode();
+            let m = fs::metadata(out.join("husk-backend/husk-backend"))
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(m & 0o111, 0o111, "executable bit must survive");
         }
     }
@@ -211,7 +227,11 @@ mod tests {
     #[test]
     fn rejects_path_traversal_in_tar() {
         let t = tempfile::tempdir().unwrap();
-        let a = write_archive(t.path(), "a.tar.gz", tar_gz(&[("../escape.txt", b"x", 0o644)], &[]));
+        let a = write_archive(
+            t.path(),
+            "a.tar.gz",
+            tar_gz(&[("../escape.txt", b"x", 0o644)], &[]),
+        );
         let out = t.path().join("out");
         assert!(extract(&a, &out).is_err());
         assert!(!t.path().join("escape.txt").exists());
@@ -220,7 +240,11 @@ mod tests {
     #[test]
     fn rejects_absolute_paths_in_tar() {
         let t = tempfile::tempdir().unwrap();
-        let a = write_archive(t.path(), "a.tar.gz", tar_gz(&[("/tmp/abs.txt", b"x", 0o644)], &[]));
+        let a = write_archive(
+            t.path(),
+            "a.tar.gz",
+            tar_gz(&[("/tmp/abs.txt", b"x", 0o644)], &[]),
+        );
         assert!(extract(&a, &t.path().join("out")).is_err());
     }
 
@@ -242,19 +266,37 @@ mod tests {
         let a = write_archive(
             t.path(),
             "a.tar.gz",
-            tar_gz(&[("pkg/lib.so.1", b"x", 0o644)], &[("pkg/lib.so", "lib.so.1")]),
+            tar_gz(
+                &[("pkg/lib.so.1", b"x", 0o644)],
+                &[("pkg/lib.so", "lib.so.1")],
+            ),
         );
         let out = t.path().join("out");
         extract(&a, &out).unwrap();
-        assert_eq!(fs::read_link(out.join("pkg/lib.so")).unwrap(), PathBuf::from("lib.so.1"));
+        assert_eq!(
+            fs::read_link(out.join("pkg/lib.so")).unwrap(),
+            PathBuf::from("lib.so.1")
+        );
     }
 
     #[test]
     fn symlink_check_is_lexical() {
         let d = Path::new("/d");
-        assert!(symlink_stays_inside(d, Path::new("/d/a/l"), Path::new("../b")));
-        assert!(!symlink_stays_inside(d, Path::new("/d/a/l"), Path::new("../../b")));
-        assert!(!symlink_stays_inside(d, Path::new("/d/l"), Path::new("/etc")));
+        assert!(symlink_stays_inside(
+            d,
+            Path::new("/d/a/l"),
+            Path::new("../b")
+        ));
+        assert!(!symlink_stays_inside(
+            d,
+            Path::new("/d/a/l"),
+            Path::new("../../b")
+        ));
+        assert!(!symlink_stays_inside(
+            d,
+            Path::new("/d/l"),
+            Path::new("/etc")
+        ));
     }
 
     #[test]

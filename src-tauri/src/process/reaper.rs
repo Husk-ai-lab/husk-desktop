@@ -25,7 +25,10 @@ fn pid_file(paths: &Paths, id: &str) -> PathBuf {
 }
 
 pub fn record(paths: &Paths, id: &str, pid: u32, exe: &Path) {
-    let rec = PidRecord { pid, exe: exe.to_path_buf() };
+    let rec = PidRecord {
+        pid,
+        exe: exe.to_path_buf(),
+    };
     if let Ok(b) = serde_json::to_vec(&rec) {
         std::fs::write(pid_file(paths, id), b).ok();
     }
@@ -39,7 +42,9 @@ pub fn forget(paths: &Paths, id: &str) {
 /// killed. Only a process whose executable path equals the recorded one is touched, so a reused
 /// pid belonging to some other program is left alone.
 pub fn reap_stale(paths: &Paths) -> usize {
-    let Ok(rd) = std::fs::read_dir(paths.run_dir()) else { return 0 };
+    let Ok(rd) = std::fs::read_dir(paths.run_dir()) else {
+        return 0;
+    };
     let mut sys = System::new();
     sys.refresh_processes(ProcessesToUpdate::All, true);
     let mut killed = 0;
@@ -54,7 +59,10 @@ pub fn reap_stale(paths: &Paths) -> usize {
         {
             if let Some(p) = sys.process(Pid::from_u32(rec.pid)) {
                 if p.exe().map(|x| x == rec.exe).unwrap_or(false) {
-                    tracing::warn!(pid = rec.pid, "killing leftover backend from a previous run");
+                    tracing::warn!(
+                        pid = rec.pid,
+                        "killing leftover backend from a previous run"
+                    );
                     p.kill();
                     killed += 1;
                 }
@@ -122,7 +130,12 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let paths = Paths::new(t.path().to_path_buf());
         paths.ensure_dirs().unwrap();
-        record(&paths, "husk", 4_000_000, Path::new("/nonexistent/husk-backend"));
+        record(
+            &paths,
+            "husk",
+            4_000_000,
+            Path::new("/nonexistent/husk-backend"),
+        );
         assert_eq!(reap_stale(&paths), 0);
         assert!(!pid_file(&paths, "husk").exists());
     }
@@ -133,7 +146,12 @@ mod tests {
         let paths = Paths::new(t.path().to_path_buf());
         paths.ensure_dirs().unwrap();
         // our own pid, but a different recorded executable: must not be killed
-        record(&paths, "husk", std::process::id(), Path::new("/definitely/not/this/exe"));
+        record(
+            &paths,
+            "husk",
+            std::process::id(),
+            Path::new("/definitely/not/this/exe"),
+        );
         assert_eq!(reap_stale(&paths), 0);
     }
 }
