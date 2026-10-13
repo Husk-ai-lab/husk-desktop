@@ -5,6 +5,8 @@
 mod app;
 mod config;
 mod error;
+#[cfg(test)]
+mod first_run_e2e;
 mod install;
 mod logs;
 mod nav;

@@ -79,7 +79,7 @@ impl AppState {
         Ok(r)
     }
 
-    fn installer(&self) -> Installer<'_> {
+    pub(crate) fn installer(&self) -> Installer<'_> {
         Installer {
             paths: &self.paths,
             client: &self.client,
@@ -378,7 +378,7 @@ fn launch_args(spec: &ComponentSpec, data: &std::path::Path) -> Vec<String> {
     }
 }
 
-async fn start_component(
+pub(crate) async fn start_component(
     state: &AppState,
     spec: &ComponentSpec,
     version: &str,
