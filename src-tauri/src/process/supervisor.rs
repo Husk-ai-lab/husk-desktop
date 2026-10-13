@@ -262,12 +262,18 @@ mod tests {
     }
 
     const SERVER: &str = r#"exec python3 -c "
-import http.server, os
+import http.server, os, socketserver
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b'ok')
     def log_message(self, *a): pass
-http.server.HTTPServer(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_forever()
+class S(http.server.HTTPServer):
+    # HTTPServer.server_bind() does a reverse-DNS lookup (getfqdn) before it listens, which can
+    # take longer than the test's whole timeout on a CI runner with slow DNS
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = 'localhost', self.server_address[1]
+S(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_forever()
 ""#;
 
     #[tokio::test]
