@@ -279,9 +279,13 @@ http.server.HTTPServer(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_for
         let port = free_port();
         let sup = Supervisor::default();
 
-        sup.start(&paths, req(exe, port, paths.log_file("husk"), 15))
+        if let Err(e) = sup
+            .start(&paths, req(exe, port, paths.log_file("husk"), 15))
             .await
-            .unwrap();
+        {
+            let log = std::fs::read_to_string(paths.log_file("husk")).unwrap_or_default();
+            panic!("start failed: {e:?}; backend output: {log:?}");
+        }
         assert!(sup.is_running("husk").await);
         assert!(!ports::is_free(port), "backend should hold the port");
 
