@@ -60,7 +60,8 @@ src-tauri/src/  config (compiled-in constants) · paths · platform · state (co
 ui/             the shell's own screens (setup, install progress, launch, errors, manager),
                 styled after Company_memory/HuskAI/pdf/Husk_AI_Prototipo_Schermate.pdf
 assets/         logo source (ui/public/brand/ holds the cropped exports; icons come from it)
-scripts/        make_local_release.py, serve_local_release.py
+scripts/        make_local_release.py, serve_local_release.py (fake GitHub for manual tests),
+                release.py (CI steps: version gate, installer collection, report) + test_release.py
 ```
 
 On disk (`<app-data>` = `ai.husk.desktop`): `config.json`, `bin/<component>/<version>/`,
@@ -78,26 +79,66 @@ On disk (`<app-data>` = `ai.husk.desktop`): `config.json`, `bin/<component>/<ver
   `install::verify::Verifier`.
 - [ ] Shell self-update (`tauri-plugin-updater`) is not wired: needs a signing keypair and the
   `latest.json` produced by `tauri-action`.
+- [x] CI/CD (`.github/workflows/release.yml`): verify, native build per OS, first-run test, report,
+  draft release on a tag. Run on a branch with `workflow_dispatch`; see "Releasing".
 - [ ] Signing secrets in GitHub Actions (Apple Developer ID + notarisation, Windows Authenticode).
+  The workflow already signs when `APPLE_CERTIFICATE` exists and reports `signed`/`notarised`.
 - [ ] Source of versions: switch `ReleaseSource` to the gateway `GET /v1/status` once it exists.
 
 ## Releasing
 
-The first release (`v0.1.0`) is a macOS Apple Silicon DMG built by hand. It is **not** signed with
-a Developer ID or notarised (that needs the paid Apple Developer Program), so Gatekeeper blocks it
-at first launch: right-click the app, choose Open, or run
-`xattr -dr com.apple.quarantine "/Applications/Husk AI.app"`.
+`.github/workflows/release.yml` (workflow `desktop-shell`) is the same process as the backend's
+`desktop-build`:
+
+| Trigger | Result |
+| --- | --- |
+| push to `main` touching `src-tauri/**`, `ui/**`, `package*.json`, `scripts/**` or the workflow | verify, build every OS, first-run test, upload installers and the report as workflow artifacts. **No release.** |
+| tag `v<version>[-suffix]` | the same, then a **draft** release with the installers, `SHA256SUMS` and the report as notes. A suffix makes it a pre-release. |
+| manual run (Actions tab, or `gh workflow run release.yml --ref <branch>`) | same as `main`; never creates a release |
+
+Jobs: `verify` (version gate, script tests, UI build, `cargo fmt --check`, `cargo clippy -D warnings`,
+`cargo test`) then `build` on native runners (macOS arm64 `macos-14`, macOS Intel `macos-15-intel`,
+Windows `windows-latest`, Linux `ubuntu-22.04`), each running the unit tests, building the bundles
+and the **first-run test**, then `report`, then `release` (tags only; the only job with
+`contents: write`).
+
+The first-run test (`src-tauri/src/first_run_e2e.rs`) takes a clean app-data folder, resolves the
+backend release published on GitHub for that OS and CPU, downloads and SHA-256-verifies it,
+installs it, starts it exactly as `launch` does, waits for `/health`, checks the reported version
+and stops it. It runs on each runner's own CPU. It does not start the packaged GUI app. Linux
+reports `skipped` while the backend publishes no Linux build.
+
+```bash
+# the same test on your machine (stop `tauri dev` first: Husk needs port 8765)
+HUSK_E2E=1 cargo test --manifest-path src-tauri/Cargo.toml first_run -- --ignored --nocapture
+# the CI helper steps
+python3 scripts/release.py check-version          # tauri.conf.json == Cargo.toml == package.json
+python3 -m unittest discover -s scripts -p 'test_*.py'
+```
+
+Required targets are `REQUIRED_TRIPLES` at the top of the workflow (macOS arm64, macOS Intel,
+Windows x64). Linux is built and reported but does not gate; promote it when the backend ships a
+Linux build. The report is always written; the `report` job then fails when a required target
+failed or is missing, and a tag then produces no draft.
+
+To cut a release:
 
 ```bash
 # 1. bump the version in src-tauri/tauri.conf.json, src-tauri/Cargo.toml and package.json
-# 2. build (ad-hoc signature; real signing identities come from CI secrets, never from here)
-APPLE_SIGNING_IDENTITY=- npm run tauri build -- --bundles dmg
-# 3. the DMG is src-tauri/target/release/bundle/dmg/Husk AI_<version>_aarch64.dmg
-gh release create v<version> "Husk-AI_<version>_aarch64.dmg" --title "Husk AI <version>" --notes-file notes.md
+#    (the gate fails the run if the three or the tag disagree), update Cargo.lock
+# 2. merge to main, check the run is green, then
+git tag v<version> && git push origin v<version>
+# 3. read the draft release and its report, then publish it
 ```
 
-`.github/workflows/release.yml` builds every OS but is manual-only until it has been run once
-(Actions tab, "Run workflow"). Windows, Linux and Intel Mac builds come from there.
+Signing is gated on secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`): without them the
+macOS bundles are ad-hoc signed and not notarised, so Gatekeeper blocks a downloaded DMG at first
+launch (right-click, Open, or `xattr -dr com.apple.quarantine "/Applications/Husk AI.app"`). The
+report lists this under known gaps. Windows Authenticode is not wired.
+
+`v0.1.0` was built by hand (`APPLE_SIGNING_IDENTITY=- npm run tauri build -- --bundles dmg`) and
+already exists, so the first release made by CI must carry a new version.
 
 ## Contracts the shell relies on in the backends
 

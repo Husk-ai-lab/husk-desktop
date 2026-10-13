@@ -1,81 +1,275 @@
-# Builds the shell installers for every OS. Signing / notarisation secrets are referenced here
-# but live only in GitHub Actions secrets.
+# Builds, checks and reports the Husk AI desktop shell installers. Same process as the backend's
+# desktop-build workflow (HuskAI-core):
+#   push to main  -> verify, build every OS, first-run test, upload workflow artifacts + report (no release)
+#   tag v*        -> the same, then a DRAFT GitHub release (a person looks at the report and publishes)
+#   manual run    -> same as main; never creates a release (the release job needs a tag ref)
+# The packaging, naming and reporting logic lives in scripts/release.py so a laptop runs the same
+# steps. See README "Releasing".
 #
-# Manual-only for now: this workflow has never been run, and v0.1.0 was published by hand (a DMG
-# built on a Mac). Run it from the Actions tab once to see it pass. Then re-enable the tag trigger
-# by adding, under `on:`,
-#     push:
-#       tags: ["v*"]
-# Note that a tag build adds its own artifacts to a release with the same tag.
-name: release
+# Signing is gated on the secrets being present: a fork, or this repository today, builds unsigned
+# and the report says so. Windows Authenticode is not wired (no certificate exists). No
+# pull_request trigger on purpose: the repository is public and the build job holds secrets.
+#
+# The file keeps its name `release.yml` so a branch version can be run before it is merged:
+#   gh workflow run release.yml --ref <branch>
+name: desktop-shell
+
 on:
+  push:
+    branches: [main]
+    paths:
+      - "src-tauri/**"
+      - "ui/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/**"
+      - ".github/workflows/release.yml"
+    tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-shell-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # Targets that must build and pass their first-run test for the run (and a release) to count as
+  # good. linux-x64 is not listed: the backend publishes no Linux build yet, so its first-run test
+  # can only skip. Promote it by adding x86_64-unknown-linux-gnu once the backend has one.
+  REQUIRED_TRIPLES: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-pc-windows-msvc
+
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-22.04]
-    runs-on: ${{ matrix.os }}
+  verify:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      label: ${{ steps.ver.outputs.label }}
+      prerelease: ${{ steps.ver.outputs.prerelease }}
+      tag: ${{ steps.ver.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - id: ver
+        name: Version gate (tauri.conf.json, Cargo.toml, package.json and the tag agree)
+        run: python scripts/release.py check-version --ref-type "$GITHUB_REF_TYPE" --ref-name "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+      - name: Script tests
+        run: python -m unittest discover -s scripts -p 'test_*.py'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
       - name: Linux webview dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - run: npm --prefix ui ci
-      - run: npm --prefix ui run build
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: UI tests (none exist yet; passes until some are added)
+        run: npm --prefix ui test -- --passWithNoTests
+      - name: Build the UI (tsc + vite; cargo needs ui/dist)
+        run: npm --prefix ui run build
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
   build:
-    needs: test
-    permissions: { contents: write }
+    needs: verify
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.experimental }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest, args: "--target aarch64-apple-darwin" }
-          - { os: macos-latest, args: "--target x86_64-apple-darwin" } # cross-built: the macos-13 Intel runner is retired
-          - { os: windows-latest, args: "" }
-          - { os: ubuntu-22.04, args: "" }
-    runs-on: ${{ matrix.os }}
+          - { target: mac-arm64, runner: macos-14, triple: aarch64-apple-darwin, bundles: dmg, experimental: false }
+          # The last Intel image GitHub offers (macos-13 is retired); a native Intel CPU, so the
+          # first-run test really runs the Intel backend.
+          - { target: mac-x64, runner: macos-15-intel, triple: x86_64-apple-darwin, bundles: dmg, experimental: false }
+          - { target: win-x64, runner: windows-latest, triple: x86_64-pc-windows-msvc, bundles: nsis, experimental: false }
+          # Old glibc on purpose (wider compatibility). Not required: no Linux backend to test against.
+          - { target: linux-x64, runner: ubuntu-22.04, triple: x86_64-unknown-linux-gnu, bundles: "appimage deb", experimental: true }
+    env:
+      # Only whether a secret exists is visible to every step; the secrets themselves are given to
+      # the signing step alone, so `npm ci` and the other steps never see them.
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          targets: ${{ contains(matrix.args, 'apple') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.triple }}
       - name: Linux webview dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - run: npm --prefix ui ci
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build the UI
+        run: npm --prefix ui run build
+      # The platform-specific code (process groups, job objects, paths) is only compiled here.
+      - name: Unit tests on this OS
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Build the installers (unsigned)
+        if: env.HAS_APPLE_CERT != 'true' || runner.os != 'macOS'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS: Developer ID signing + notarisation
+          APPLE_SIGNING_IDENTITY: "-" # macOS: ad-hoc signature, as v0.1.0 was built; ignored elsewhere
+          BUNDLES: ${{ matrix.bundles }}
+        run: npm run tauri build -- --bundles $BUNDLES
+      - name: Build the installers (Developer ID signed + notarised)
+        if: env.HAS_APPLE_CERT == 'true' && runner.os == 'macOS'
+        env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # shell self-update signature (tauri-plugin-updater, not wired yet)
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          BUNDLES: ${{ matrix.bundles }}
+        run: npm run tauri build -- --bundles $BUNDLES
+
+      - name: First-run test (downloads the real backend release, installs it, starts it)
+        env:
+          HUSK_E2E: "1"
+          HUSK_E2E_GITHUB_TOKEN: ${{ github.token }} # read-only; hosted runners share anonymous rate limits
+          HUSK_E2E_KEEP: ${{ runner.temp }}/husk-e2e
+          HUSK_E2E_RESULT: ${{ github.workspace }}/out/e2e-result.json
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked first_run -- --ignored --nocapture
+
+      - name: Name, hash and check the installers
+        if: always()
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          LABEL: ${{ needs.verify.outputs.label }}
+          JOB_STATUS: ${{ job.status }}
+          SIGNED: ${{ env.HAS_APPLE_CERT == 'true' && runner.os == 'macOS' }}
+          NOTARISED: ${{ env.HAS_APPLE_CERT == 'true' && runner.os == 'macOS' && secrets.APPLE_ID != '' }}
+        run: |
+          python scripts/release.py collect --triple "$TRIPLE" --version "$VERSION" --label "$LABEL" \
+            --out out --e2e-result out/e2e-result.json --job-status "$JOB_STATUS" \
+            --signed "$SIGNED" --notarised "$NOTARISED"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Husk AI ${{ github.ref_name }}"
-          releaseDraft: true
-          args: ${{ matrix.args }}
+          name: bundles-${{ matrix.target }}
+          path: |
+            out/Husk-AI_*
+            out/status-*.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: e2e-logs-${{ matrix.target }}
+          path: ${{ runner.temp }}/husk-e2e/logs
+          if-no-files-found: ignore
+          retention-days: 14
+
+  report:
+    needs: [verify, build]
+    # Written even when a build failed; the step fails afterwards (like the backend's report).
+    if: always() && needs.verify.result == 'success'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bundles-*
+          path: release
+          merge-multiple: true
+        continue-on-error: true # every build may have failed before uploading; the report says "missing"
+      - name: Release report
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          LABEL: ${{ needs.verify.outputs.label }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p release
+          python scripts/release.py report \
+            --status-dir release --out release --require "$REQUIRED_TRIPLES" \
+            --version "$VERSION" --label "$LABEL" --tag "$TAG" --commit "$GITHUB_SHA" \
+            --builder "github-actions run $RUN_ID"
+      - name: Job summary
+        if: always()
+        run: cat release/shell-release-report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: release-meta
+          path: |
+            release/shell-release-report.json
+            release/shell-release-report.md
+            release/SHA256SUMS
+          if-no-files-found: ignore
+
+  release:
+    # A draft, on purpose: a person reads the report and publishes. It only runs for a tag, and
+    # only when `report` passed (all required targets built and passed their first-run test).
+    needs: [verify, report]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bundles-*
+          path: assets
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-meta
+          path: assets
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          LABEL: ${{ needs.verify.outputs.label }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          installers=(assets/Husk-AI_*)
+          [ "${#installers[@]}" -gt 0 ] || { echo "no installers to publish" >&2; exit 1; }
+          flags=(--draft --verify-tag)
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" "${installers[@]}" assets/SHA256SUMS assets/shell-release-report.json \
+            --repo "$GITHUB_REPOSITORY" "${flags[@]}" \
+            --title "Husk AI $LABEL" --notes-file assets/shell-release-report.md
