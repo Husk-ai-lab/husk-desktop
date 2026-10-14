@@ -21,6 +21,37 @@ executable *and* `_internal/` (it holds `libpython`). A bare executable asset is
 cannot start, and an install without `_internal/` is reported as broken ("Repair installation").
 The tag may be `v1.4.0` or a plain name such as `alpha-release`; a real version replaces it.
 
+## Install (macOS, while builds are not notarised)
+
+The DMGs are not signed with a Developer ID or notarised yet, so a DMG downloaded in a browser is
+quarantined and Gatekeeper blocks it. A file fetched with `curl` is not quarantined, so this
+installs the latest release and it opens normally:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Husk-ai-lab/husk-desktop/main/scripts/install-macos.sh | sh
+```
+
+To read the script before running it:
+
+```bash
+curl -fsSL -o install-macos.sh https://raw.githubusercontent.com/Husk-ai-lab/husk-desktop/main/scripts/install-macos.sh
+less install-macos.sh && sh install-macos.sh
+```
+
+It picks the DMG for this Mac's CPU (Apple Silicon or Intel), downloads it together with the
+release's `SHA256SUMS`, **refuses to install on a mismatch or when the checksum file is missing**,
+copies `Husk AI.app` to `/Applications` (or `~/Applications` when that is not writable) and
+unmounts the image. Options, as environment variables: `HUSK_VERSION=0.1.1` (instead of the
+latest), `HUSK_INSTALL_DIR=<folder>`. To uninstall, delete the app; the data in
+`~/Library/Application Support/ai.husk.desktop` stays.
+
+What it is not: a signature. The checksum comes from the same release, so it proves the file is
+the one the release holds, not who published it. It also does not make the app notarised: it only
+avoids the quarantine flag, and an app downloaded in a browser still needs Open Anyway in System
+Settings, or `xattr -dr com.apple.quarantine "/Applications/Husk AI.app"`. Removing the warning for
+everyone needs the Apple Developer ID and notarisation described under "Releasing". Windows has no
+equivalent: SmartScreen shows "More info, Run anyway" until the installer is Authenticode-signed.
+
 ## Develop
 
 Needs Rust (stable), Node 20+, Python 3 (test scripts only).
@@ -61,6 +92,7 @@ ui/             the shell's own screens (setup, install progress, launch, errors
                 styled after Company_memory/HuskAI/pdf/Husk_AI_Prototipo_Schermate.pdf
 assets/         logo source (ui/public/brand/ holds the cropped exports; icons come from it)
 scripts/        make_local_release.py, serve_local_release.py (fake GitHub for manual tests),
+                install-macos.sh (curl installer, see "Install"),
                 release.py (CI steps: version gate, installer collection, report) + test_release.py
 ```
 
