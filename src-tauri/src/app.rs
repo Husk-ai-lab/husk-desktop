@@ -8,6 +8,7 @@ use std::time::Duration;
 use rand::RngCore;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::config::{
     self, ComponentSpec, COMPONENTS, HEALTH_TIMEOUT, HUSK, HUSK_PORT, STUDIO, STUDIO_MCP_PORT,
@@ -17,6 +18,7 @@ use crate::error::{Result, ShellError};
 use crate::install::installer::{exe_path, is_intact, prune_versions, Installer, Phase};
 use crate::install::verify::{Sha256Verifier, Verifier};
 use crate::logs;
+use crate::notify;
 use crate::paths::Paths;
 use crate::process::reaper;
 use crate::process::supervisor::{StartRequest, Supervisor};
@@ -506,11 +508,108 @@ pub async fn launch(
     Ok(())
 }
 
+/// Every start: look for a newer shell and newer backends, update the menu label, and ask once.
+/// Offline or rate limited it only logs: start-up never waits for it and it never shows an error.
 fn spawn_update_check(app: AppHandle, state: Arc<AppState>) {
     tauri::async_runtime::spawn(async move {
-        let found = refresh_updates(&state).await;
-        windows::set_update_badge(&app, found);
+        let (backend_count, shell) =
+            tokio::join!(refresh_updates(&state), state.source.latest_shell());
+        windows::set_update_badge(&app, backend_count);
+
+        let shell = match shell {
+            Ok(Some(r)) if is_newer(&r.version, env!("CARGO_PKG_VERSION")) => Some(r),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::info!(error = %e, "shell update check failed");
+                None
+            }
+        };
+        let cfg = state.cfg();
+        let backends = notify::backends_from(
+            |id| cfg.installed(id).map(|i| i.version.clone()),
+            &state.updates.lock().unwrap().clone(),
+        );
+        let found = notify::Found { shell, backends };
+        if found.is_empty() {
+            return;
+        }
+        tracing::info!(
+            shell = found.shell.as_ref().map(|s| s.version.as_str()),
+            backends = found.backends.len(),
+            "update available, asking"
+        );
+        offer_updates(&app, &state, found).await;
     });
+}
+
+/// Shows a two-button native dialog and waits for the answer (`true` = the confirm button).
+async fn ask(app: &AppHandle, p: &notify::Popup) -> bool {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(&p.body)
+        .title(&p.title)
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            p.confirm.clone(),
+            p.cancel.clone(),
+        ))
+        .show(move |confirmed| {
+            let _ = tx.send(confirmed);
+        });
+    rx.await.unwrap_or(false)
+}
+
+async fn offer_updates(app: &AppHandle, state: &Arc<AppState>, found: notify::Found) {
+    let lang = locale();
+    let Some(popup) = notify::update_popup(&found, env!("CARGO_PKG_VERSION"), lang) else {
+        return;
+    };
+    if !ask(app, &popup).await {
+        return;
+    }
+
+    // a new shell cannot replace itself: its release page has the installers
+    if let Some(shell) = &found.shell {
+        if let Err(e) = open::that(&shell.url) {
+            tracing::warn!(error = %e, "could not open the download page");
+        }
+    }
+    if found.backends.is_empty() {
+        return;
+    }
+
+    let guard = state.op_lock.lock().await;
+    let mut done = Vec::new();
+    for b in &found.backends {
+        let (Some(spec), Some(rel)) = (
+            config::spec(b.id),
+            state.updates.lock().unwrap().get(b.id).cloned(),
+        ) else {
+            continue;
+        };
+        match install_one(app, state, spec, &rel, true).await {
+            Ok(()) => done.push(b.clone()),
+            Err(e) => {
+                tracing::warn!(component = b.id, error = %e, "start-up update failed");
+                let (title, body) = notify::failure_text(&e.to_string(), lang);
+                app.dialog()
+                    .message(body)
+                    .title(title)
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+                break;
+            }
+        }
+    }
+    drop(guard);
+    windows::set_update_badge(app, state.updates.lock().unwrap().len());
+    if done.is_empty() {
+        return;
+    }
+    if ask(app, &notify::restart_popup(&done, lang)).await {
+        state.supervisor.stop_all(&state.paths).await;
+        app.restart();
+    }
 }
 
 /// Looks for newer releases of installed components; returns how many were found.

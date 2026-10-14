@@ -10,6 +10,7 @@ mod first_run_e2e;
 mod install;
 mod logs;
 mod nav;
+mod notify;
 mod paths;
 mod platform;
 mod process;
@@ -38,6 +39,9 @@ fn app_data_root(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
 
 pub fn run() {
     let app = tauri::Builder::default()
+        // native message dialogs, used from Rust only (the update popup); it adds no IPC
+        // permission to any window
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // a second launch just brings the first one forward
             if let Some(w) = app.get_webview_window("main") {

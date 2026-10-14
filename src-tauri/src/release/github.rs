@@ -4,7 +4,9 @@
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 
-use super::{normalize_version, select_asset, Asset, Channel, ReleaseInfo, ReleaseSource};
+use super::{
+    normalize_version, select_asset, Asset, Channel, ReleaseInfo, ReleaseSource, ShellRelease,
+};
 use crate::config::ComponentSpec;
 use crate::error::{Result, ShellError};
 use crate::platform::host_triple;
@@ -57,6 +59,8 @@ struct GhRelease {
     prerelease: bool,
     #[serde(default)]
     assets: Vec<GhAsset>,
+    #[serde(default)]
+    html_url: Option<String>,
 }
 
 fn to_info(spec: &ComponentSpec, r: GhRelease, triple: &str) -> Option<ReleaseInfo> {
@@ -89,6 +93,29 @@ pub fn parse_latest(spec: &ComponentSpec, body: &str, triple: &str) -> Result<Op
     Ok(to_info(spec, r, triple))
 }
 
+/// `releases/latest` body of the shell's own repository -> its version and release page.
+/// A draft, or a tag that is not a plain version string, is ignored.
+pub fn parse_shell_release(body: &str) -> Result<Option<ShellRelease>> {
+    let r: GhRelease = serde_json::from_str(body)?;
+    if r.draft {
+        return Ok(None);
+    }
+    let Ok(version) = normalize_version(&r.tag_name) else {
+        return Ok(None);
+    };
+    let url = r
+        .html_url
+        .filter(|u| u.starts_with("https://"))
+        .unwrap_or_else(|| {
+            format!(
+                "https://github.com/{}/releases/tag/{}",
+                crate::config::SHELL_REPO,
+                r.tag_name
+            )
+        });
+    Ok(Some(ShellRelease { version, url }))
+}
+
 /// `releases` list body -> the newest release (pre-releases included) that has our asset.
 pub fn parse_list(spec: &ComponentSpec, body: &str, triple: &str) -> Result<Option<ReleaseInfo>> {
     let rs: Vec<GhRelease> = serde_json::from_str(body)?;
@@ -118,6 +145,21 @@ impl ReleaseSource for GitHubSource {
                         None => Ok(None),
                     }
                 }
+            }
+        })
+    }
+
+    fn latest_shell(&self) -> BoxFuture<'_, Result<Option<ShellRelease>>> {
+        Box::pin(async move {
+            // `releases/latest` only ever returns a published, non-pre-release release
+            let url = format!(
+                "{}/repos/{}/releases/latest",
+                self.api_base,
+                crate::config::SHELL_REPO
+            );
+            match self.fetch(&url).await? {
+                Some(body) => parse_shell_release(&body),
+                None => Ok(None),
             }
         })
     }
@@ -200,5 +242,56 @@ mod tests {
         assert!(parse_latest(&HUSK, body, "aarch64-apple-darwin")
             .unwrap()
             .is_none());
+    }
+    #[test]
+    fn shell_release_gives_version_and_page() {
+        let body = r#"{"tag_name":"v0.2.0","draft":false,"prerelease":false,
+          "html_url":"https://github.com/Husk-ai-lab/husk-desktop/releases/tag/v0.2.0","assets":[]}"#;
+        let r = parse_shell_release(body).unwrap().unwrap();
+        assert_eq!(r.version, "0.2.0");
+        assert_eq!(
+            r.url,
+            "https://github.com/Husk-ai-lab/husk-desktop/releases/tag/v0.2.0"
+        );
+    }
+
+    #[test]
+    fn shell_release_without_a_page_falls_back_and_never_trusts_a_non_https_url() {
+        let none = r#"{"tag_name":"v0.2.0"}"#;
+        assert_eq!(
+            parse_shell_release(none).unwrap().unwrap().url,
+            "https://github.com/Husk-ai-lab/husk-desktop/releases/tag/v0.2.0"
+        );
+        let odd = r#"{"tag_name":"v0.2.0","html_url":"file:///etc/passwd"}"#;
+        assert!(parse_shell_release(odd)
+            .unwrap()
+            .unwrap()
+            .url
+            .starts_with("https://github.com/"));
+    }
+
+    #[test]
+    fn shell_draft_and_hostile_tag_are_ignored() {
+        assert!(parse_shell_release(r#"{"tag_name":"v0.2.0","draft":true}"#)
+            .unwrap()
+            .is_none());
+        assert!(parse_shell_release(r#"{"tag_name":"v../../x"}"#)
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_source_that_only_knows_backends_has_no_shell_release() {
+        struct OnlyBackends;
+        impl ReleaseSource for OnlyBackends {
+            fn latest<'a>(
+                &'a self,
+                _: &'a ComponentSpec,
+                _: Channel,
+            ) -> BoxFuture<'a, Result<Option<ReleaseInfo>>> {
+                Box::pin(async { Ok(None) })
+            }
+        }
+        assert!(OnlyBackends.latest_shell().await.unwrap().is_none());
     }
 }

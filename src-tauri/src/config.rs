@@ -19,6 +19,9 @@ pub const GATEWAY_STATUS_URL: &str = "https://api.husk-ai.com/v1/status";
 
 pub const GITHUB_API: &str = "https://api.github.com";
 
+/// Where releases of the shell itself are published (installers; the start-up popup looks here).
+pub const SHELL_REPO: &str = "Husk-ai-lab/husk-desktop";
+
 pub const HEALTH_TIMEOUT: Duration = Duration::from_secs(20);
 pub const STOP_GRACE: Duration = Duration::from_secs(5);
 

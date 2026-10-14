@@ -42,6 +42,15 @@ pub struct ReleaseInfo {
     pub asset: Asset,
 }
 
+/// A published release of the shell itself. It cannot be applied in place: the update popup
+/// sends the user to `url` (the release page, where the installers are).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellRelease {
+    /// Tag without the leading `v`.
+    pub version: String,
+    pub url: String,
+}
+
 pub trait ReleaseSource: Send + Sync {
     /// Latest release of `spec` that has an asset for this machine; `Ok(None)` when there is no
     /// release yet or none for this platform (the UI shows "non ancora disponibile").
@@ -50,6 +59,12 @@ pub trait ReleaseSource: Send + Sync {
         spec: &'a ComponentSpec,
         channel: Channel,
     ) -> BoxFuture<'a, Result<Option<ReleaseInfo>>>;
+
+    /// Latest published (stable) release of the shell itself; `Ok(None)` when there is none.
+    /// Defaults to "none" so a source that only knows the backends needs no change.
+    fn latest_shell(&self) -> BoxFuture<'_, Result<Option<ShellRelease>>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 /// `v1.4.0` -> `1.4.0`, rejecting anything that could not be a plain directory name.
