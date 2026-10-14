@@ -1,7 +1,7 @@
 {
   "name": "husk-desktop",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Tauri 2 shell for Husk AI and Husk Studio",
   "scripts": {
     "tauri": "tauri",
