@@ -10,6 +10,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
+use crate::bridge;
 use crate::config::{
     self, ComponentSpec, COMPONENTS, HEALTH_TIMEOUT, HUSK, HUSK_PORT, STUDIO, STUDIO_MCP_PORT,
     STUDIO_PORT,
@@ -40,6 +41,9 @@ pub struct AppState {
     pub op_lock: tokio::sync::Mutex<()>,
     /// Newer releases found by the update check, by component id.
     pub updates: Mutex<HashMap<String, ReleaseInfo>>,
+    /// The poll loop that answers "Install Husk Studio" requests from Husk (`bridge.rs`). At most
+    /// one exists; it belongs to the running Husk backend and is replaced or aborted with it.
+    bridge: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
 impl AppState {
@@ -69,7 +73,32 @@ impl AppState {
             launch_secret: secret.iter().map(|b| format!("{b:02x}")).collect(),
             op_lock: tokio::sync::Mutex::new(()),
             updates: Mutex::new(HashMap::new()),
+            bridge: Mutex::new(None),
         })
+    }
+
+    /// The per-launch secret the backends were given (`HUSK_LAUNCH_SECRET`). Callers must not log it.
+    pub fn launch_secret(&self) -> &str {
+        &self.launch_secret
+    }
+
+    /// Starts the one poll loop for the Husk that just became healthy, replacing any earlier one,
+    /// so a new backend (whose request ids restart) always begins with a fresh cursor.
+    pub fn start_bridge(&self, app: AppHandle) {
+        let mut slot = self.bridge.lock().unwrap();
+        if let Some(old) = slot.take() {
+            old.abort();
+        }
+        *slot = Some(tauri::async_runtime::spawn(bridge::run(
+            app,
+            self.launch_secret().to_string(),
+        )));
+    }
+
+    pub fn stop_bridge(&self) {
+        if let Some(h) = self.bridge.lock().unwrap().take() {
+            h.abort();
+        }
     }
 
     fn cfg(&self) -> Config {
@@ -487,6 +516,8 @@ pub async fn launch(
     confirm_and_prune(&state, "husk", &current.version);
 
     let _ = app.emit("shell://launch", LaunchEvent { step: "opening" });
+    // Husk answered /health: from now on "Install Husk Studio" in its UI opens the Manager
+    state.start_bridge(app.clone());
     windows::show_husk(&app)?;
     spawn_update_check(app.clone(), state.clone());
     if studio_installed {
@@ -668,6 +699,7 @@ async fn offer_updates(app: &AppHandle, state: &Arc<AppState>, found: notify::Fo
         return;
     }
     if ask(app, &notify::restart_popup(&done, lang)).await {
+        state.stop_bridge();
         state.supervisor.stop_all(&state.paths).await;
         app.restart();
     }
@@ -744,6 +776,9 @@ pub async fn repair(
         .ok_or_else(|| ShellError::NoRelease(spec.id.into()))?;
     // the broken folder of the installed version is removed so the install starts clean
     if let Some(i) = state.cfg().installed(spec.id) {
+        if spec.id == "husk" {
+            state.stop_bridge(); // its requests belong to the Husk being replaced
+        }
         state.supervisor.stop(&state.paths, spec.id).await;
         std::fs::remove_dir_all(state.paths.component_dir(spec.id, &i.version)).ok();
     }
@@ -806,6 +841,7 @@ pub async fn restart(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> std::result::Result<(), ShellError> {
+    state.stop_bridge();
     state.supervisor.stop_all(&state.paths).await;
     app.restart()
 }

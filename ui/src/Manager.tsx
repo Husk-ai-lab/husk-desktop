@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { api, onGoto, toShellError, type ComponentView, type ShellError, type StateView } from "./api";
+import { api, onFocus, onGoto, toShellError, type ComponentView, type ShellError, type StateView } from "./api";
 import { errorKey, type TFn } from "./i18n";
 import { useLang } from "./hooks";
 import { useTheme } from "./theme";
@@ -8,9 +8,7 @@ import { Logo } from "./Logo";
 import { ThemeButton } from "./Layout";
 import { FileText, Layers, Refresh, Shield, Sliders } from "./Icons";
 
-type Tab = "components" | "updates" | "logs" | "settings";
-const TABS: Tab[] = ["components", "updates", "logs", "settings"];
-const isTab = (s: string): s is Tab => (TABS as string[]).includes(s);
+import { TABS, isFocusable, isTab, parseHash, type Tab } from "./focus";
 const ICONS = { components: Layers, updates: Refresh, logs: FileText, settings: Sliders };
 
 type Run = (key: string, fn: () => Promise<unknown>) => Promise<void>;
@@ -18,10 +16,9 @@ type Run = (key: string, fn: () => Promise<unknown>) => Promise<void>;
 export function Manager() {
   const { t, lang, setLang } = useLang();
   const { theme, setTheme, toggle } = useTheme();
-  const [tab, setTab] = useState<Tab>(() => {
-    const h = location.hash.replace("#", "");
-    return isTab(h) ? h : "components";
-  });
+  const [tab, setTab] = useState<Tab>(() => parseHash(location.hash).tab);
+  // the card to point at (Husk's "Install Husk Studio"); cleared after the highlight has played
+  const [focusId, setFocusId] = useState<string | null>(() => parseHash(location.hash).focus);
   const [state, setState] = useState<StateView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<ShellError | null>(null);
@@ -33,8 +30,20 @@ export function Manager() {
     reload().catch((e) => setError(toShellError(e)));
     getVersion().then(setVersion).catch(() => {});
     const un = onGoto((tb) => isTab(tb) && setTab(tb));
-    return () => void un.then((u) => u());
+    const unFocus = onFocus((c) => isFocusable(c) && setFocusId(c));
+    return () => {
+      void un.then((u) => u());
+      void unFocus.then((u) => u());
+    };
   }, [reload]);
+
+  // scroll the card into view, keep the highlight for a moment, then let it go
+  useEffect(() => {
+    if (!focusId || tab !== "components" || !state) return;
+    document.querySelector(`[data-component="${focusId}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const timer = setTimeout(() => setFocusId(null), 3200);
+    return () => clearTimeout(timer);
+  }, [focusId, tab, state]);
 
   // one action at a time; show its error; refresh afterwards
   const run: Run = async (key, fn) => {
@@ -93,7 +102,7 @@ export function Manager() {
               </div>
             )}
 
-            {tab === "components" && state && <Components state={state} busy={busy} run={run} t={t} />}
+            {tab === "components" && state && <Components state={state} busy={busy} run={run} t={t} focusId={focusId} />}
             {tab === "updates" && state && <Updates state={state} busy={busy} run={run} t={t} />}
             {tab === "logs" && <Logs t={t} />}
             {tab === "settings" && (
@@ -137,13 +146,13 @@ function statusOf(c: ComponentView, t: TFn) {
   return c.running ? { dot: "ok", text: t("mgr.running") } : { dot: "", text: t("mgr.stopped") };
 }
 
-function Components({ state, busy, run, t }: { state: StateView; busy: string | null; run: Run; t: TFn }) {
+function Components({ state, busy, run, t, focusId }: { state: StateView; busy: string | null; run: Run; t: TFn; focusId: string | null }) {
   return (
     <>
       {state.components.map((c) => {
         const s = statusOf(c, t);
         return (
-          <div className="card row" key={c.id}>
+          <div className={`card row${focusId === c.id ? " pulse" : ""}`} key={c.id} data-component={c.id}>
             <Tile id={c.id} />
             <div className="grow">
               <div className="name">

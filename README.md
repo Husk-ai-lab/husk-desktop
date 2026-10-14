@@ -55,6 +55,22 @@ An error names the program holding the port when it can be found (`lsof` / `nets
 a port inside a range reserved by Hyper-V, WSL or Docker is reported separately
 (`netsh interface ipv4 show excludedportrange protocol=tcp` lists them).
 
+## "Install Husk Studio" in Husk
+
+A page served by a backend has no IPC, so Husk cannot call the shell. When the user clicks
+*Install Husk Studio* (sidebar card, the link next to an error, the suggestions card) Husk queues a
+request and the shell **pulls** it: once Husk answers `/health`, `src-tauri/src/bridge.rs`
+long-polls `GET http://127.0.0.1:8765/internal/shell/requests?after=<id>&wait=25` with the launch
+secret in `X-Husk-Launch-Secret`. An `open_manager` request opens the Manager on that tab and
+highlights the component's card (*Add* if Studio is not installed, *Repair* if its files are
+damaged, *Open Studio* if it is installed but not running).
+
+Only an allow-listed action, a tab and a component travel, so a response can never make the shell
+open a URL or run anything. The first poll of a backend only learns its newest id (its backlog is
+ignored), a request older than 30 s is dropped, and the loop stops after three 403 answers (a
+backend that was not started by this shell). Husk only queues a request while a shell polled in
+the last 45 s: with an older shell, or none, the click opens the GitHub page by itself.
+
 ## Develop
 
 Needs Rust (stable), Node 20+, Python 3 (test scripts only).

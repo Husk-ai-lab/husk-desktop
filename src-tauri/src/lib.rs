@@ -3,6 +3,7 @@
 //! It never logs in, never talks to Neon/Stripe/the AI provider and never reads documents.
 
 mod app;
+mod bridge;
 mod config;
 mod error;
 #[cfg(test)]

@@ -90,16 +90,30 @@ pub fn show_manager(app: &AppHandle) -> Result<()> {
 }
 
 pub fn show_manager_tab(app: &AppHandle, tab: &str) -> Result<()> {
+    show_manager_focus(app, tab, None)
+}
+
+/// Opens the Manager on `tab` and, when `component` is given, highlights that component's card.
+/// A window that does not exist yet learns the component from its URL hash: an event emitted
+/// right after the window is built would arrive before the page listens and be lost.
+pub fn show_manager_focus(app: &AppHandle, tab: &str, component: Option<&str>) -> Result<()> {
     if let Some(w) = app.get_webview_window("manager") {
         let _ = app.emit_to("manager", "shell://goto", tab);
+        if let Some(c) = component {
+            let _ = app.emit_to("manager", "shell://focus", c);
+        }
         w.show().map_err(werr)?;
         w.set_focus().map_err(werr)?;
         return Ok(());
     }
+    let hash = match component {
+        Some(c) => format!("{tab}&focus={c}"),
+        None => tab.to_string(),
+    };
     WebviewWindowBuilder::new(
         app,
         "manager",
-        WebviewUrl::App(format!("index.html#{tab}").into()),
+        WebviewUrl::App(format!("index.html#{hash}").into()),
     )
     .title(tr("Husk AI — installation", "Husk AI — installazione"))
     .inner_size(1000.0, 680.0)

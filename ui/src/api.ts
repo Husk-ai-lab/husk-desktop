@@ -59,6 +59,9 @@ export const onLaunch = (cb: (s: LaunchStep) => void): Promise<UnlistenFn> =>
   listen<{ step: LaunchStep }>("shell://launch", (e) => cb(e.payload.step));
 export const onGoto = (cb: (tab: string) => void): Promise<UnlistenFn> =>
   listen<string>("shell://goto", (e) => cb(e.payload));
+/** The shell asks the Manager to point at one component's card ("Install Husk Studio" in Husk). */
+export const onFocus = (cb: (component: string | null) => void): Promise<UnlistenFn> =>
+  listen<string | null>("shell://focus", (e) => cb(e.payload));
 
 /** A rejected invoke carries our serialized ShellError; anything else becomes `other`. */
 export function toShellError(e: unknown): ShellError {

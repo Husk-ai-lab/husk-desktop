@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::app::{start_component, AppState};
+use crate::bridge::{self, Open};
 use crate::config::{self, HUSK, HUSK_PORT};
 use crate::install::installer::is_intact;
 use crate::paths::{is_safe_segment, Paths};
@@ -35,6 +36,8 @@ enum Outcome {
         version: String,
         backend_version: String,
         health_seconds: f64,
+        /// `passed`, or `unsupported` for a Husk that has no shell-requests endpoint yet.
+        bridge: &'static str,
     },
     Skipped(String),
 }
@@ -117,6 +120,77 @@ async fn health(port: u16) -> Result<serde_json::Value, String> {
         .map_err(|e| format!("/health is not JSON: {e}"))
 }
 
+/// "Install Husk Studio": the real poll loop against the real Husk. The click is simulated with
+/// the POST Husk's own UI sends; the loop must hand the shell an `open_manager` for Studio.
+/// A Husk without the endpoint (404) is recorded as unsupported, not as a failure.
+async fn bridge_check(state: &AppState) -> Result<&'static str, String> {
+    let base = format!("http://127.0.0.1:{HUSK_PORT}");
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let probe = client
+        .get(format!("{base}/internal/shell/requests?after=0&wait=0"))
+        .header("X-Husk-Launch-Secret", state.launch_secret())
+        .send()
+        .await
+        .map_err(|e| format!("shell requests probe: {}", e.without_url()))?;
+    if probe.status() == reqwest::StatusCode::NOT_FOUND {
+        eprintln!("e2e: this Husk has no /internal/shell/requests (bridge unsupported)");
+        return Ok("unsupported");
+    }
+    if !probe.status().is_success() {
+        return Err(format!("shell requests probe answered {}", probe.status()));
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(bridge::run_loop(
+        client.clone(),
+        base.clone(),
+        state.launch_secret().to_string(),
+        bridge::Timing::default(),
+        move |open| {
+            let _ = tx.send(open);
+        },
+    ));
+    // the first poll answers at once and makes Husk count the shell as attached
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let posted = client
+        .post(format!("{base}/api/v1/system/shell/open-manager"))
+        .header("Origin", &base)
+        .json(&serde_json::json!({"tab": "components", "component": "studio"}))
+        .send()
+        .await
+        .map_err(|e| format!("open-manager: {}", e.without_url()))?;
+    if !posted.status().is_success() {
+        task.abort();
+        return Err(format!("open-manager answered {}", posted.status()));
+    }
+    let out: serde_json::Value = posted.json().await.map_err(|e| e.to_string())?;
+    if out["queued"] != true {
+        task.abort();
+        return Err(format!(
+            "Husk did not queue the request (shell not attached?): {out}"
+        ));
+    }
+    let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+    task.abort();
+    let expected = Open {
+        tab: "components",
+        component: Some("studio"),
+    };
+    match got {
+        Ok(Some(open)) if open == expected => {
+            eprintln!("e2e: bridge delivered open_manager(components, studio)");
+            Ok("passed")
+        }
+        other => Err(format!("the shell did not receive the request: {other:?}")),
+    }
+}
+
 async fn run(state: &AppState) -> Result<Outcome, String> {
     let triple = host_triple();
     let Some(rel) = resolve(state).await? else {
@@ -169,10 +243,12 @@ async fn run(state: &AppState) -> Result<Outcome, String> {
             rel.version
         ));
     }
+    let bridge = bridge_check(state).await?;
     Ok(Outcome::Passed {
         version: rel.version,
         backend_version,
         health_seconds,
+        bridge,
     })
 }
 
@@ -240,6 +316,7 @@ async fn first_run_installs_and_starts_the_published_backend() {
             version,
             backend_version,
             health_seconds,
+            bridge,
         }) => {
             if let Some(problem) = leftover {
                 write_result(
@@ -257,6 +334,7 @@ async fn first_run_installs_and_starts_the_published_backend() {
                     "version": version,
                     "backend_version": backend_version,
                     "health_seconds": health_seconds,
+                    "bridge": bridge,
                 }),
             );
         }
