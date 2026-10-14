@@ -28,8 +28,10 @@ Every time the app starts and Husk is up, it looks for a newer release of itself
 Husk Studio) and, if anything is newer, shows **one** dialog:
 
 - **Update now** (a backend is newer): downloads it next to the current one, checks its SHA-256,
-  and offers a restart. The previous version is kept for rollback, and the new one is used at the
-  next start. A newer shell is not installed in place: its release page opens in the browser.
+  and offers a restart. The new one is used at the next start. The old version is kept only until
+  the new one has started successfully once (that is what the automatic rollback needs); then its
+  folder is deleted and the Manager's Rollback goes away. A newer shell is not installed in
+  place: its release page opens in the browser.
 - **Later**: nothing happens; the same dialog comes back at the next start (there is no
   "don't ask again").
 - Offline or rate limited: nothing is shown and start-up is not delayed. The menu item still
@@ -38,6 +40,20 @@ Husk Studio) and, if anything is newer, shows **one** dialog:
 Code: `src-tauri/src/notify.rs` (wording and decisions, unit-tested) and `app.rs`
 (`spawn_update_check`, `offer_updates`). Test it with the local fake GitHub: put a
 `latest.json` for `Husk-ai-lab/husk-desktop` under `.local-release/api/` with a newer tag.
+
+## Ports and quick restarts
+
+Husk uses 8765 (fixed: the Clerk redirect URI) and Studio 7654. Before starting a backend the shell
+binds the port **the way the backend does** (without `SO_REUSEADDR`). Sockets of a backend that
+stopped a moment ago stay in `TIME_WAIT` for 30 s (macOS) to 60 s (Linux), and Studio's own port
+check fails during that time even though nothing is listening. The shell therefore waits for the
+port (up to 60 s, up to 3 s when a program really holds it), and retries once if the backend still
+reports "already in use". Studio is started in the background after Husk, so this wait never delays
+Husk; if Studio cannot start, a dialog says why and offers *Try again*.
+
+An error names the program holding the port when it can be found (`lsof` / `netstat`). On Windows
+a port inside a range reserved by Hyper-V, WSL or Docker is reported separately
+(`netsh interface ipv4 show excludedportrange protocol=tcp` lists them).
 
 ## Develop
 

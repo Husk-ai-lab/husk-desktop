@@ -30,6 +30,8 @@ pub struct StartRequest {
 #[derive(Default)]
 pub struct Supervisor {
     children: Mutex<HashMap<String, Child>>,
+    /// How long a start waits for its port (tests make this short).
+    pub waits: ports::Waits,
 }
 
 impl Supervisor {
@@ -43,11 +45,37 @@ impl Supervisor {
 
     /// Spawn the backend and wait until `GET /health` answers 2xx. On any failure the child is
     /// killed, so a failed start never leaves a process behind.
+    ///
+    /// The port is first waited for (a backend that stopped a moment ago leaves `TIME_WAIT`
+    /// sockets that make Studio's own port check fail, see `ports.rs`). If the backend still
+    /// exits with "already in use", it is started once more after waiting again.
     pub async fn start(&self, paths: &Paths, req: StartRequest) -> Result<()> {
-        if !ports::is_free(req.port) {
-            return Err(ShellError::PortBusy(req.port));
+        self.ensure_port(req.port).await?;
+        let (first, log_from) = self.start_once(paths, &req).await;
+        match first {
+            Err(ShellError::StartExited(..)) if output_says_port_in_use(&req.log, log_from) => {
+                tracing::warn!(component = %req.id, "backend found its port busy, waiting and retrying once");
+                self.ensure_port(req.port).await?;
+                self.start_once(paths, &req).await.0
+            }
+            other => other,
         }
+    }
 
+    async fn ensure_port(&self, port: u16) -> Result<()> {
+        match ports::wait_until_bindable(port, self.waits).await {
+            // still lingering after the whole wait: try anyway, a backend that binds with
+            // SO_REUSEADDR (uvicorn) starts fine and the one that does not is retried above
+            ports::PortState::Free | ports::PortState::Lingering => Ok(()),
+            ports::PortState::Denied => Err(ShellError::PortReserved(port)),
+            ports::PortState::InUse => {
+                Err(ShellError::PortBusy(port, ports::port_owner(port).await))
+            }
+        }
+    }
+
+    /// One spawn + health wait. Returns the result and where this run's output starts in the log.
+    async fn start_once(&self, paths: &Paths, req: &StartRequest) -> (Result<()>, u64) {
         let mut cmd = Command::new(&req.exe);
         cmd.args(&req.args);
         if let Some(dir) = req.exe.parent() {
@@ -56,18 +84,31 @@ impl Supervisor {
         for (k, v) in &req.env {
             cmd.env(k, v);
         }
-        let log = open_log(&req.log)?;
+        let log = match open_log(&req.log) {
+            Ok(l) => l,
+            Err(e) => return (Err(e), 0),
+        };
         // the log is appended to: only what this run writes may be judged below
         let log_from = log.metadata().map(|m| m.len()).unwrap_or(0);
+        let stdio = match log.try_clone() {
+            Ok(c) => c,
+            Err(e) => return (Err(e.into()), log_from),
+        };
         cmd.stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone()?))
+            .stdout(Stdio::from(stdio))
             .stderr(Stdio::from(log))
             .kill_on_drop(true);
         harden(&mut cmd);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| ShellError::Io(format!("cannot start {}: {e}", req.id)))?;
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    Err(ShellError::Io(format!("cannot start {}: {e}", req.id))),
+                    log_from,
+                )
+            }
+        };
         let pid = child.id().unwrap_or(0);
         attach_to_job(&child);
         reaper::record(paths, &req.id, pid, &req.exe);
@@ -76,7 +117,7 @@ impl Supervisor {
         match wait_healthy(&mut child, req.port, &req.health_path, req.timeout, &req.id).await {
             Ok(()) => {
                 self.children.lock().await.insert(req.id.clone(), child);
-                Ok(())
+                (Ok(()), log_from)
             }
             Err(e) => {
                 terminate(&mut child).await;
@@ -88,9 +129,9 @@ impl Supervisor {
                     && launcher_lost_its_libraries(&req.log, log_from)
                 {
                     tracing::error!(component = %req.id, "install is incomplete (PyInstaller cannot load its Python library)");
-                    return Err(ShellError::NotInstalled(req.id.clone()));
+                    return (Err(ShellError::NotInstalled(req.id.clone())), log_from);
                 }
-                Err(e)
+                (Err(e), log_from)
             }
         }
     }
@@ -112,18 +153,29 @@ impl Supervisor {
     }
 }
 
-/// True when the output written since `from` carries PyInstaller's "folder is incomplete" message.
-fn launcher_lost_its_libraries(log: &PathBuf, from: u64) -> bool {
+/// True when the backend wrote "... is already in use" since `from`: it could not bind its port.
+fn output_says_port_in_use(log: &PathBuf, from: u64) -> bool {
+    run_output(log, from)
+        .to_ascii_lowercase()
+        .contains("already in use")
+}
+
+fn run_output(log: &PathBuf, from: u64) -> String {
     use std::io::{Read, Seek, SeekFrom};
     let Ok(mut f) = std::fs::File::open(log) else {
-        return false;
+        return String::new();
     };
     if f.seek(SeekFrom::Start(from)).is_err() {
-        return false;
+        return String::new();
     }
     let mut out = String::new();
     f.take(64 * 1024).read_to_string(&mut out).ok();
-    out.contains("Failed to load Python shared library")
+    out
+}
+
+/// True when the output written since `from` carries PyInstaller's "folder is incomplete" message.
+fn launcher_lost_its_libraries(log: &PathBuf, from: u64) -> bool {
+    run_output(log, from).contains("Failed to load Python shared library")
 }
 
 fn open_log(path: &PathBuf) -> Result<std::fs::File> {
@@ -399,6 +451,18 @@ S(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_forever()
         assert!(!paths.run_dir().join("husk.pid").exists());
     }
 
+    /// Short waits: tests must not sit through the real 3 s / 60 s budgets.
+    fn quick() -> Supervisor {
+        Supervisor {
+            waits: ports::Waits {
+                lingering: Duration::from_millis(100),
+                in_use: Duration::from_millis(100),
+                poll: Duration::from_millis(10),
+            },
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn busy_port_is_refused_before_spawning() {
         let t = tempfile::tempdir().unwrap();
@@ -407,12 +471,119 @@ S(('127.0.0.1', int(os.environ['HUSK_PORT'])), H).serve_forever()
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         let exe = script(t.path(), "never-run", "touch ran.marker");
-        let sup = Supervisor::default();
+        let sup = quick();
         let err = sup
             .start(&paths, req(exe, port, paths.log_file("husk"), 2))
             .await
             .unwrap_err();
-        assert!(matches!(err, ShellError::PortBusy(p) if p == port));
+        assert!(
+            matches!(err, ShellError::PortBusy(p, _) if p == port),
+            "{err:?}"
+        );
+        assert_eq!(err.code(), "port_busy");
         assert!(!t.path().join("ran.marker").exists());
+    }
+
+    #[tokio::test]
+    async fn a_port_that_frees_up_during_the_wait_is_used() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = Paths::new(t.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let sup = Supervisor {
+            waits: ports::Waits {
+                lingering: Duration::from_secs(5),
+                in_use: Duration::from_secs(5),
+                poll: Duration::from_millis(20),
+            },
+            ..Default::default()
+        };
+        // the previous owner goes away 300 ms in
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            drop(l);
+        });
+        let exe = script(t.path(), "fake-backend", SERVER);
+        sup.start(&paths, req(exe, port, paths.log_file("husk"), 15))
+            .await
+            .unwrap();
+        assert!(sup.is_running("husk").await);
+        sup.stop(&paths, "husk").await;
+    }
+
+    /// First run says what Studio says when it cannot bind; the second one serves.
+    const FAILS_ONCE: &str = r#"
+if [ ! -f "$0.ran" ]; then
+  touch "$0.ran"
+  echo "error: port $HUSK_PORT is already in use; --port was given explicitly, so it will not pick another" >&2
+  exit 1
+fi
+"#;
+
+    #[tokio::test]
+    async fn a_backend_that_finds_its_port_busy_is_started_once_more() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = Paths::new(t.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        let exe = script(t.path(), "studio-like", &format!("{FAILS_ONCE}\n{SERVER}"));
+        let sup = quick();
+        sup.start(&paths, req(exe, free_port(), paths.log_file("studio"), 15))
+            .await
+            .unwrap();
+        assert!(sup.is_running("husk").await);
+        sup.stop(&paths, "husk").await;
+    }
+
+    #[tokio::test]
+    async fn a_backend_that_always_finds_its_port_busy_fails_after_one_retry() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = Paths::new(t.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        let body = r#"
+echo x >> "$0.count"
+echo "error: port $HUSK_PORT is already in use" >&2
+exit 1
+"#;
+        let exe = script(t.path(), "always-busy", body);
+        let sup = quick();
+        let err = sup
+            .start(
+                &paths,
+                req(exe.clone(), free_port(), paths.log_file("husk"), 15),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ShellError::StartExited(_, Some(1))),
+            "{err:?}"
+        );
+        let runs = std::fs::read_to_string(format!("{}.count", exe.display())).unwrap();
+        assert_eq!(runs.lines().count(), 2, "one start and one retry, no more");
+        assert!(!sup.is_running("husk").await);
+        assert!(!paths.run_dir().join("husk.pid").exists());
+    }
+
+    #[tokio::test]
+    async fn another_exit_code_is_not_retried() {
+        let t = tempfile::tempdir().unwrap();
+        let paths = Paths::new(t.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        let exe = script(
+            t.path(),
+            "crashes",
+            "echo x >> \"$0.count\"\necho boom >&2\nexit 3",
+        );
+        let sup = quick();
+        let err = sup
+            .start(
+                &paths,
+                req(exe.clone(), free_port(), paths.log_file("husk"), 15),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ShellError::StartExited(_, Some(3))));
+        let runs = std::fs::read_to_string(format!("{}.count", exe.display())).unwrap();
+        assert_eq!(runs.lines().count(), 1);
     }
 }

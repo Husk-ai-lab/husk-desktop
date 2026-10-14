@@ -8,7 +8,8 @@
 
 use std::collections::HashMap;
 
-use crate::config::COMPONENTS;
+use crate::config::{COMPONENTS, STUDIO_PORT};
+use crate::error::ShellError;
 use crate::release::{ReleaseInfo, ShellRelease};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +166,58 @@ pub fn failure_text(detail: &str, lang: &str) -> (String, String) {
     )
 }
 
+/// Why Husk Studio did not start, in words a user can act on, plus the technical detail.
+pub fn studio_failed_text(err: &ShellError, lang: &str) -> (String, String) {
+    let reason = match (err.code(), lang) {
+        ("port_busy", "it") => format!(
+            "La porta locale {STUDIO_PORT} è già occupata da un altro programma. Chiudilo e riprova."
+        ),
+        ("port_busy", _) => format!(
+            "The local port {STUDIO_PORT} is already used by another program. Close it and try again."
+        ),
+        ("port_reserved", "it") => format!(
+            "Il sistema riserva la porta {STUDIO_PORT} (spesso Hyper-V, WSL o Docker su Windows). \
+             Riavvia il PC o libera l'intervallo, poi riprova."
+        ),
+        ("port_reserved", _) => format!(
+            "The system reserves port {STUDIO_PORT} (often Hyper-V, WSL or Docker on Windows). \
+             Restart the PC or free the range, then try again."
+        ),
+        ("start_timeout", "it") => "Husk Studio non ha risposto in tempo.".to_string(),
+        ("start_timeout", _) => "Husk Studio did not answer in time.".to_string(),
+        ("start_exited", "it") => "Husk Studio si è chiuso durante l'avvio.".to_string(),
+        ("start_exited", _) => "Husk Studio stopped while starting.".to_string(),
+        ("not_installed", "it") => {
+            "L'installazione di Husk Studio è incompleta: ripristinala dal Gestore.".to_string()
+        }
+        ("not_installed", _) => {
+            "The Husk Studio installation is incomplete: repair it from the Manager.".to_string()
+        }
+        (_, "it") => "Husk Studio non è stato avviato.".to_string(),
+        _ => "Husk Studio could not be started.".to_string(),
+    };
+    let label = pick(lang, "Details", "Dettagli");
+    (
+        pick(
+            lang,
+            "Husk Studio did not start",
+            "Husk Studio non è partito",
+        ),
+        format!("{reason}\n\n{label}: {err}"),
+    )
+}
+
+/// The same text as a two-button question: try again, or leave Studio off.
+pub fn studio_failed_popup(err: &ShellError, lang: &str) -> Popup {
+    let (title, body) = studio_failed_text(err, lang);
+    Popup {
+        title,
+        body,
+        confirm: pick(lang, "Try again", "Riprova"),
+        cancel: pick(lang, "Close", "Chiudi"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +357,31 @@ mod tests {
             ["husk", "studio"]
         );
         assert!(backends_from(|_| Some("1".into()), &HashMap::new()).is_empty());
+    }
+    #[test]
+    fn studio_failure_text_names_the_port_the_owner_and_the_way_out() {
+        let busy = ShellError::PortBusy(7654, Some("python3 (pid 4321)".into()));
+        let p = studio_failed_popup(&busy, "en");
+        assert_eq!(
+            (p.confirm.as_str(), p.cancel.as_str()),
+            ("Try again", "Close")
+        );
+        assert!(
+            p.body
+                .contains("port 7654 is already used by another program"),
+            "{}",
+            p.body
+        );
+        assert!(p.body.contains("python3 (pid 4321)"), "{}", p.body);
+
+        let reserved = studio_failed_text(&ShellError::PortReserved(7654), "it");
+        assert!(
+            reserved.1.contains("riserva la porta 7654"),
+            "{}",
+            reserved.1
+        );
+
+        let other = studio_failed_text(&ShellError::Other("x".into()), "en");
+        assert!(other.1.starts_with("Husk Studio could not be started."));
     }
 }

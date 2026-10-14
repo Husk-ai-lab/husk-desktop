@@ -7,3 +7,5 @@ ui/dist/
 *.part
 .local-release/
 __pycache__/
+# local brief for the husk-ai (Studio) repository, not part of this repo
+STUDIO_PORT_REUSEADDR_BRIEF.md

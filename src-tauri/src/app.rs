@@ -53,7 +53,12 @@ impl AppState {
             Arc::new(GitHubSource::new(client.clone(), config::github_api_base()));
         let mut secret = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut secret);
-        let config = Config::load(&paths.config_file());
+        let mut config = Config::load(&paths.config_file());
+        if drop_stale_previous(&paths, &mut config) {
+            tracing::info!("forgot rollback targets whose folders no longer exist");
+            // best effort: in memory it is already right, and the next config write persists it
+            let _ = config.save(&paths.config_file());
+        }
         Ok(Self {
             paths,
             client,
@@ -318,7 +323,9 @@ async fn install_one(
     Ok(())
 }
 
-fn husk_env(state: &AppState, studio_up: bool) -> Vec<(String, String)> {
+/// `studio_installed`: Studio's URLs are handed to Husk whenever Studio is installed, even if it is
+/// still starting. Husk's Studio client probes lazily and degrades to a no-op when Studio is down.
+fn husk_env(state: &AppState, studio_installed: bool) -> Vec<(String, String)> {
     let mut env = vec![
         ("HUSK_PORT".into(), HUSK_PORT.to_string()),
         (
@@ -328,7 +335,7 @@ fn husk_env(state: &AppState, studio_up: bool) -> Vec<(String, String)> {
         ("HUSK_LAUNCH_SECRET".into(), state.launch_secret.clone()),
         ("HUSK_ENV".into(), "prod".into()),
     ];
-    if studio_up {
+    if studio_installed {
         env.push((
             "HUSK_STUDIO_UI_URL".into(),
             format!("http://127.0.0.1:{STUDIO_PORT}"),
@@ -384,7 +391,7 @@ pub(crate) async fn start_component(
     state: &AppState,
     spec: &ComponentSpec,
     version: &str,
-    studio_up: bool,
+    studio_installed: bool,
 ) -> Result<()> {
     let exe = exe_path(&state.paths, spec, version);
     // The shell only runs what it installed under bin/.
@@ -395,7 +402,7 @@ pub(crate) async fn start_component(
     let data = state.paths.data_dir(spec.id);
     std::fs::create_dir_all(&data)?;
     let env = if spec.id == "husk" {
-        husk_env(state, studio_up)
+        husk_env(state, studio_installed)
     } else {
         studio_env(state)
     };
@@ -440,24 +447,16 @@ pub async fn launch(
         .cloned()
         .ok_or_else(|| ShellError::NotInstalled("husk".into()))?;
 
-    // Studio is a development aid: its failure never blocks Husk.
-    let mut studio_up = false;
-    if let Some(st) = cfg
+    // Studio is a development aid: it is started in the background after Husk (below), so a
+    // slow or failing Studio never delays or blocks Husk.
+    let studio_installed = cfg
         .installed("studio")
-        .filter(|i| is_intact(&state.paths, &STUDIO, &i.version))
-    {
-        let _ = app.emit("shell://launch", LaunchEvent { step: "studio" });
-        match start_component(&state, &STUDIO, &st.version, false).await {
-            Ok(()) => studio_up = true,
-            Err(e) => {
-                tracing::warn!(error = %e, "Husk Studio did not start; continuing without it")
-            }
-        }
-    }
+        .map(|i| is_intact(&state.paths, &STUDIO, &i.version))
+        .unwrap_or(false);
 
     let _ = app.emit("shell://launch", LaunchEvent { step: "husk" });
     let mut current = husk;
-    let mut result = start_component(&state, &HUSK, &current.version, studio_up).await;
+    let mut result = start_component(&state, &HUSK, &current.version, studio_installed).await;
     if result.is_err() && current.pending_confirm {
         // a fresh update that does not start: go back to the version that worked
         if let Some(prev) = current.previous_version.clone() {
@@ -478,33 +477,95 @@ pub async fn launch(
                     previous_version: None,
                     pending_confirm: false,
                 };
-                result = start_component(&state, &HUSK, &current.version, studio_up).await;
+                result = start_component(&state, &HUSK, &current.version, studio_installed).await;
             }
         }
     }
-    if let Err(e) = result {
-        state.supervisor.stop(&state.paths, "studio").await;
-        return Err(e);
-    }
+    result?;
 
-    // Started once: the update is confirmed; keep this and the previous version, drop the rest.
-    state.update_config(|c| {
-        if let Some(i) = c.components.get_mut("husk") {
-            i.pending_confirm = false;
-        }
-    })?;
-    prune_versions(
-        &state.paths,
-        "husk",
-        &[
-            &current.version,
-            current.previous_version.as_deref().unwrap_or(""),
-        ],
-    );
+    // Started once: the update is confirmed, so the version it replaced is deleted.
+    confirm_and_prune(&state, "husk", &current.version);
 
     let _ = app.emit("shell://launch", LaunchEvent { step: "opening" });
     windows::show_husk(&app)?;
     spawn_update_check(app.clone(), state.clone());
+    if studio_installed {
+        tauri::async_runtime::spawn(start_studio_in_background(app.clone(), state.clone()));
+    }
+    Ok(())
+}
+
+/// A component that has started successfully once is confirmed: the version it replaced is not
+/// needed any more, so `previous_version` is forgotten and its folder deleted (together with
+/// any `.tmp` leftovers). Until then the old version is kept for the automatic rollback.
+fn confirm_and_prune(state: &AppState, id: &str, version: &str) {
+    let saved = state.update_config(|c| {
+        if let Some(i) = c.components.get_mut(id) {
+            if i.version == version {
+                i.pending_confirm = false;
+                i.previous_version = None;
+            }
+        }
+    });
+    if let Err(e) = saved {
+        tracing::warn!(component = id, error = %e, "could not record the confirmed update");
+        return;
+    }
+    prune_versions(&state.paths, id, &[version]);
+}
+
+/// `previous_version` entries whose folder is gone (deleted by hand, an earlier prune): a
+/// rollback to them cannot work and must not be offered. Returns whether anything changed.
+fn drop_stale_previous(paths: &Paths, cfg: &mut Config) -> bool {
+    let mut changed = false;
+    for (id, inst) in cfg.components.iter_mut() {
+        let Some(spec) = config::spec(id) else {
+            continue;
+        };
+        if let Some(prev) = inst.previous_version.clone() {
+            if !is_intact(paths, spec, &prev) {
+                inst.previous_version = None;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// Starts Studio once Husk is up, waiting for its port if the previous run is still closing it.
+/// A failure is shown (it used to be only a log line) with a way to try again.
+async fn start_studio_in_background(app: AppHandle, state: Arc<AppState>) {
+    loop {
+        let result = {
+            let _guard = state.op_lock.lock().await;
+            start_studio_if_needed(&state).await
+        };
+        let Err(e) = result else {
+            return;
+        };
+        tracing::warn!(error = %e, "Husk Studio did not start");
+        let popup = notify::studio_failed_popup(&e, locale());
+        if !ask(&app, &popup).await {
+            return;
+        }
+    }
+}
+
+/// Starts Studio unless it is running already; the caller holds `op_lock`.
+async fn start_studio_if_needed(state: &AppState) -> Result<()> {
+    let cfg = state.cfg();
+    let Some(st) = cfg
+        .installed("studio")
+        .filter(|i| is_intact(&state.paths, &STUDIO, &i.version))
+        .cloned()
+    else {
+        return Ok(());
+    };
+    if state.supervisor.is_running("studio").await {
+        return Ok(());
+    }
+    start_component(state, &STUDIO, &st.version, false).await?;
+    confirm_and_prune(state, "studio", &st.version);
     Ok(())
 }
 
@@ -773,17 +834,29 @@ pub fn read_log(state: State<'_, Arc<AppState>>, name: String) -> String {
 /// Menu / command entry point for "Apri Husk Studio".
 pub async fn open_studio_window(app: &AppHandle, state: &Arc<AppState>) -> Result<()> {
     let cfg = state.cfg();
-    let Some(st) = cfg
+    let installed = cfg
         .installed("studio")
-        .filter(|i| is_intact(&state.paths, &STUDIO, &i.version))
-        .cloned()
-    else {
+        .map(|i| is_intact(&state.paths, &STUDIO, &i.version))
+        .unwrap_or(false);
+    if !installed {
         // not installed: send the user to the place where it can be added
         return windows::show_manager(app);
-    };
+    }
     if !state.supervisor.is_running("studio").await {
-        let _g = state.op_lock.lock().await;
-        start_component(state, &STUDIO, &st.version, false).await?;
+        // checked again under the lock: the background start from `launch` may be what we waited for
+        let result = {
+            let _g = state.op_lock.lock().await;
+            start_studio_if_needed(state).await
+        };
+        if let Err(e) = result {
+            let (title, body) = notify::studio_failed_text(&e, locale());
+            app.dialog()
+                .message(body)
+                .title(title)
+                .kind(MessageDialogKind::Error)
+                .show(|_| {});
+            return Err(e);
+        }
     }
     windows::show_studio(app, None)
 }
@@ -810,6 +883,161 @@ mod launch_args_tests {
                 "127.0.0.1",
                 "--no-open-browser"
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+
+    /// A component folder that passes `is_intact` (executable + `_internal/`).
+    fn install(paths: &Paths, spec: &ComponentSpec, version: &str) {
+        let d = paths.component_dir(spec.id, version);
+        std::fs::create_dir_all(d.join("_internal")).unwrap();
+        std::fs::write(d.join(crate::platform::exe_file(spec.exe_name)), b"x").unwrap();
+    }
+
+    fn state_with(
+        spec: &ComponentSpec,
+        current: &str,
+        previous: Option<&str>,
+        pending: bool,
+    ) -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        install(&paths, spec, current);
+        if let Some(p) = previous {
+            install(&paths, spec, p);
+        }
+        let mut cfg = Config::default();
+        cfg.components.insert(
+            spec.id.into(),
+            InstalledComponent {
+                version: current.into(),
+                previous_version: previous.map(String::from),
+                pending_confirm: pending,
+            },
+        );
+        cfg.save(&paths.config_file()).unwrap();
+        (dir, AppState::new(paths).unwrap())
+    }
+
+    fn dirs(state: &AppState, id: &str) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(state.paths.component_root(id))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn a_confirmed_update_deletes_the_version_it_replaced() {
+        for spec in [&HUSK, &STUDIO] {
+            let (_d, state) = state_with(spec, "1.1.0", Some("1.0.0"), true);
+            // an interrupted download of some other version is swept too
+            std::fs::create_dir_all(state.paths.component_root(spec.id).join("0.9.0.tmp")).unwrap();
+            assert_eq!(dirs(&state, spec.id), ["0.9.0.tmp", "1.0.0", "1.1.0"]);
+
+            confirm_and_prune(&state, spec.id, "1.1.0");
+
+            assert_eq!(dirs(&state, spec.id), ["1.1.0"], "{}", spec.id);
+            let c = state.cfg();
+            let i = c.installed(spec.id).unwrap();
+            assert_eq!(
+                (
+                    i.version.as_str(),
+                    i.previous_version.clone(),
+                    i.pending_confirm
+                ),
+                ("1.1.0", None, false)
+            );
+            // persisted, not only in memory
+            let on_disk = Config::load(&state.paths.config_file());
+            assert_eq!(on_disk.installed(spec.id).unwrap().previous_version, None);
+        }
+    }
+
+    #[test]
+    fn nothing_is_deleted_before_the_new_version_has_started() {
+        let (_d, state) = state_with(&HUSK, "1.1.0", Some("1.0.0"), true);
+        // an update was downloaded: no confirm yet, so the old one is still there for rollback
+        assert_eq!(dirs(&state, "husk"), ["1.0.0", "1.1.0"]);
+        assert_eq!(
+            state
+                .cfg()
+                .installed("husk")
+                .unwrap()
+                .previous_version
+                .as_deref(),
+            Some("1.0.0")
+        );
+    }
+
+    #[test]
+    fn confirming_a_version_that_is_not_the_installed_one_changes_nothing_in_the_config() {
+        let (_d, state) = state_with(&HUSK, "1.1.0", Some("1.0.0"), true);
+        confirm_and_prune(&state, "husk", "9.9.9");
+        assert_eq!(
+            state
+                .cfg()
+                .installed("husk")
+                .unwrap()
+                .previous_version
+                .as_deref(),
+            Some("1.0.0")
+        );
+    }
+
+    #[test]
+    fn a_rollback_target_that_no_longer_exists_is_forgotten_on_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path().to_path_buf());
+        paths.ensure_dirs().unwrap();
+        install(&paths, &HUSK, "1.1.0"); // 1.0.0 was deleted by hand
+        let mut cfg = Config::default();
+        cfg.components.insert(
+            "husk".into(),
+            InstalledComponent {
+                version: "1.1.0".into(),
+                previous_version: Some("1.0.0".into()),
+                pending_confirm: false,
+            },
+        );
+        cfg.save(&paths.config_file()).unwrap();
+
+        let state = AppState::new(paths).unwrap();
+        assert_eq!(
+            state.cfg().installed("husk").unwrap().previous_version,
+            None
+        );
+        assert_eq!(
+            Config::load(&state.paths.config_file())
+                .installed("husk")
+                .unwrap()
+                .previous_version,
+            None
+        );
+    }
+
+    #[test]
+    fn a_rollback_target_that_exists_is_kept_on_start() {
+        let (_d, state) = state_with(&HUSK, "1.1.0", Some("1.0.0"), true);
+        drop(state);
+        // a new AppState over the same folder must not drop a valid target
+        let dir = _d.path().to_path_buf();
+        let again = AppState::new(Paths::new(dir)).unwrap();
+        assert_eq!(
+            again
+                .cfg()
+                .installed("husk")
+                .unwrap()
+                .previous_version
+                .as_deref(),
+            Some("1.0.0")
         );
     }
 }

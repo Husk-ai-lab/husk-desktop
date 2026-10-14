@@ -18,8 +18,10 @@ pub enum ShellError {
     NoChecksum(String),
     #[error("extraction failed: {0}")]
     Extract(String),
-    #[error("port {0} is already in use")]
-    PortBusy(u16),
+    #[error("port {0} is already in use{}", .1.as_deref().map(|o| format!(" by {o}")).unwrap_or_default())]
+    PortBusy(u16, Option<String>),
+    #[error("port {0} is reserved by the system (access denied)")]
+    PortReserved(u16),
     #[error("{0} did not answer /health in time")]
     StartTimeout(String),
     #[error("{0} exited during startup (code {1:?})")]
@@ -41,7 +43,8 @@ impl ShellError {
             ShellError::ChecksumMismatch(_) => "checksum_mismatch",
             ShellError::NoChecksum(_) => "no_checksum",
             ShellError::Extract(_) => "extract_failed",
-            ShellError::PortBusy(_) => "port_busy",
+            ShellError::PortBusy(..) => "port_busy",
+            ShellError::PortReserved(_) => "port_reserved",
             ShellError::StartTimeout(_) => "start_timeout",
             ShellError::StartExited(..) => "start_exited",
             ShellError::NotInstalled(_) => "not_installed",
