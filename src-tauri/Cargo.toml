@@ -1,6 +1,6 @@
 [package]
 name = "husk-desktop"
-version = "0.1.3"
+version = "0.2.0"
 description = "Tauri 2 shell for Husk AI and Husk Studio"
 edition = "2021"
 rust-version = "1.80"

@@ -15,20 +15,6 @@ launch (see the README, "Install" and "Releasing").
 
 Work that exists on a branch but is not on `main` yet.
 
-### Added
-- **"Install Husk Studio" in Husk opens the Manager.** The shell long-polls Husk's
-  `GET /internal/shell/requests` (launch secret in `X-Husk-Launch-Secret`) once Husk is healthy and
-  acts on `open_manager` requests: the Manager opens on the requested tab and the component's card
-  (*Add*, *Repair* or *Open Studio*) is highlighted and scrolled into view. A window that does not
-  exist yet learns the card from its URL hash, so the first request is never lost. Requests older
-  than 30 s and anything outside the allow-lists are ignored; the loop stops after three 403
-  answers. One loop exists at a time and a restarted Husk is learned from scratch. No window that
-  shows a backend gets IPC. Needs Husk `0.1.2-alpha.1` or later; with an older Husk nothing is
-  queued and the click opens GitHub as before. *(branch `feat/studio-install-bridge`)*
-- `src-tauri/src/bridge.rs` with 13 unit and fake-endpoint tests; `ui/src/focus.ts` with 5 tests;
-  the real-backend end-to-end test now also simulates the click and checks that the loop receives
-  it (`bridge: passed`, or `unsupported` for a Husk without the endpoint).
-
 ### Fixed
 - Flaky supervisor unit test on the Intel Mac runner (`PortBusy` in
   `incomplete_install_is_reported_as_not_installed`): the test ports now come from below the OS's
@@ -42,6 +28,31 @@ Work that exists on a branch but is not on `main` yet.
   `curl` is not quarantined, so the unsigned app opens without the Gatekeeper block. The raw URL
   in the README only works once this is merged to `main`.
   *(branch `docs/curl-install`, commit `a2e5d78`)*
+
+## [0.2.0] - 2026-10-14
+
+Husk's "Install Husk Studio" button now opens the shell's Manager. Needs Husk `0.1.2-alpha.1` or
+later for the button to reach the shell; with an older Husk it opens the GitHub page as before.
+Commits `b412b20` and the port-test fix.
+
+### Added
+- **"Install Husk Studio" in Husk opens the Manager.** The shell long-polls Husk's
+  `GET /internal/shell/requests` (launch secret in `X-Husk-Launch-Secret`) once Husk is healthy and
+  acts on `open_manager` requests: the Manager opens on the requested tab and the component's card
+  (*Add*, *Repair* or *Open Studio*) is highlighted and scrolled into view. A window that does not
+  exist yet learns the card from its URL hash, so the first request is never lost. Requests older
+  than 30 s and anything outside the allow-lists are ignored; the loop stops after three 403
+  answers. One loop exists at a time and a restarted Husk is learned from scratch. No window that
+  shows a backend gets IPC. Needs Husk `0.1.2-alpha.1` or later; with an older Husk nothing is
+  queued and the click opens GitHub as before.
+- `src-tauri/src/bridge.rs` with 13 unit and fake-endpoint tests; `ui/src/focus.ts` with 5 tests;
+  the real-backend end-to-end test now also simulates the click and checks that the loop receives
+  it (`bridge: passed`, or `unsupported` for a Husk without the endpoint).
+
+### Fixed (tests only)
+- `a_port_with_time_wait_sockets_is_lingering_not_in_use` and `an_unused_port_is_free_for_a_strict_bind`
+  failed once on the macOS arm64 runner because an ephemeral port they had just released was bound
+  by a parallel test. They now use a fixed port range.
 
 ## [0.1.3] - 2026-10-14
 
@@ -197,7 +208,8 @@ Commits `778d8ad` and `c885613`.
   there is no signed manifest.
 - The shell cannot update itself.
 
-[Unreleased]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.1.0...v0.1.1
