@@ -171,6 +171,21 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
+    /// A listener on a port from a fixed range below the OS's ephemeral one. Tests run in
+    /// parallel and other tests bind port 0; an ephemeral number that this test just released
+    /// can be handed to one of them before it is looked at again.
+    fn fixed_listener() -> TcpListener {
+        use std::sync::atomic::{AtomicU16, Ordering};
+        static NEXT: AtomicU16 = AtomicU16::new(0);
+        loop {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let port = 15_000 + (std::process::id() as u16).wrapping_add(n) % 4_000;
+            if let Ok(l) = TcpListener::bind(("127.0.0.1", port)) {
+                return l;
+            }
+        }
+    }
+
     #[test]
     fn detects_a_busy_port() {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -184,7 +199,7 @@ mod tests {
     #[test]
     fn an_unused_port_is_free_for_a_strict_bind() {
         let port = {
-            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let l = fixed_listener();
             l.local_addr().unwrap().port()
         };
         // a listener that never accepted a connection leaves nothing behind
@@ -196,7 +211,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_port_with_time_wait_sockets_is_lingering_not_in_use() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = fixed_listener();
         let port = listener.local_addr().unwrap().port();
         let client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         let (served, _) = listener.accept().unwrap();
