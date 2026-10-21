@@ -6,7 +6,8 @@ All notable changes to the Husk AI desktop shell (`husk-desktop`). The format fo
 checks against the tag.
 
 This file covers the shell only. The Husk AI and Husk Studio backends are released from their own
-repositories (`Husk-ai-lab/HuskAI-core`, `Husk-ai-lab/husk-ai`) and are downloaded by the shell.
+repositories (`Husk-ai-lab/huskai-releases`, the public mirror of the private `HuskAI-core`, and
+`Husk-ai-lab/husk-ai`) and are downloaded by the shell.
 
 Every installer is still **unsigned**: macOS Gatekeeper and Windows SmartScreen warn on first
 launch (see the README, "Install" and "Releasing").
@@ -21,13 +22,22 @@ Work that exists on a branch but is not on `main` yet.
   ephemeral range, so other tests' HTTP client sockets cannot collide with them.
   *(branch `ci/test-port-flake`, commit `51abe06`)*
 
+## [0.2.1] - 2026-10-21
+
+Husk AI backends now come from the public mirror `Husk-ai-lab/huskai-releases`, so the shell keeps
+installing and updating Husk once `HuskAI-core` is private.
+
+### Changed
+- Husk AI backend releases are read from the public mirror `Husk-ai-lab/huskai-releases`
+  instead of `Husk-ai-lab/HuskAI-core`, which is now private (anonymous API calls to it 404).
+  Same tags, asset names and SHA-256 digests. Shells up to 0.2.0 still look at HuskAI-core.
+
 ### Added
-- `scripts/install-macos.sh` and a README "Install (macOS)" section: a `curl` installer that picks
-  the DMG for the Mac's CPU, verifies it against the release's `SHA256SUMS` (refuses on mismatch
-  or when the file is missing), installs `Husk AI.app` and unmounts the image. A file fetched by
-  `curl` is not quarantined, so the unsigned app opens without the Gatekeeper block. The raw URL
-  in the README only works once this is merged to `main`.
-  *(branch `docs/curl-install`, commit `a2e5d78`)*
+- `scripts/install-macos.sh` and a README section: a `curl` installer that picks the DMG for the
+  Mac's CPU, verifies it against the release's `SHA256SUMS`, installs `Husk AI.app` into
+  `/Applications` (`HUSK_VERSION`, `HUSK_INSTALL_DIR` override) and unmounts the image. A file
+  fetched by `curl` is not quarantined, so the unsigned app opens without the Gatekeeper block.
+- `npm run dev` / `npm start` as shortcuts for `tauri dev`.
 
 ## [0.2.0] - 2026-10-14
 
@@ -208,7 +218,8 @@ Commits `778d8ad` and `c885613`.
   there is no signed manifest.
 - The shell cannot update itself.
 
-[Unreleased]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Husk-ai-lab/husk-desktop/compare/v0.1.1...v0.1.2

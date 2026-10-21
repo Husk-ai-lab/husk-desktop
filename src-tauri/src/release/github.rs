@@ -175,7 +175,7 @@ mod tests {
       "assets": [
         {"name":"husk-backend-1.4.0-aarch64-apple-darwin.tar.gz","size":98213345,
          "digest":"sha256:2d201ef07b21d5652860bce4370faef46e3ff158c205ceedcd9d457880fd2c20",
-         "browser_download_url":"https://github.com/Husk-ai-lab/HuskAI-core/releases/download/v1.4.0/husk-backend-1.4.0-aarch64-apple-darwin.tar.gz"},
+         "browser_download_url":"https://github.com/Husk-ai-lab/huskai-releases/releases/download/v1.4.0/husk-backend-1.4.0-aarch64-apple-darwin.tar.gz"},
         {"name":"husk-backend-1.4.0-x86_64-pc-windows-msvc.zip","size":120000000,
          "browser_download_url":"https://example/w.zip"},
         {"name":"SHA256SUMS","size":300,"browser_download_url":"https://example/s"}
@@ -195,7 +195,7 @@ mod tests {
         assert!(r
             .asset
             .url
-            .starts_with("https://github.com/Husk-ai-lab/HuskAI-core/"));
+            .starts_with("https://github.com/Husk-ai-lab/huskai-releases/"));
         assert!(parse_latest(&HUSK, LATEST, "x86_64-unknown-linux-gnu")
             .unwrap()
             .is_none());

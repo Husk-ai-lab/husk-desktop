@@ -5,12 +5,21 @@ asks what to install (**Husk AI** is required, **Husk Studio** is optional and r
 downloads the PyInstaller one-folder backends from GitHub Releases, starts them on loopback, and
 shows their web UIs (FastAPI serving React + Vite) in native webview windows.
 
+Install on macOS without the Gatekeeper prompt (latest release, SHA-256 checked, into `/Applications`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Husk-ai-lab/husk-desktop/main/scripts/install-macos.sh | bash
+```
+
+`HUSK_VERSION=0.2.0` picks a version, `HUSK_INSTALL_DIR=...` another folder. Works because curl
+downloads carry no quarantine attribute; browser downloads still need signing + notarization.
+
 The shell never logs in, never calls the AI provider, Neon or Stripe, and never reads documents.
 Architecture source of truth: `Company_memory/HuskAI/md/Technical plan for Husk AI.md`.
 
 | Component | Repo (releases) | Binary | Port |
 | --- | --- | --- | --- |
-| Husk AI (required) | `Husk-ai-lab/HuskAI-core` | `husk-backend` | 8765 (fixed: the Clerk redirect URI is `http://127.0.0.1:8765/callback`) |
+| Husk AI (required) | `Husk-ai-lab/huskai-releases` (public mirror of the private `HuskAI-core`) | `husk-backend` | 8765 (fixed: the Clerk redirect URI is `http://127.0.0.1:8765/callback`) |
 | Husk Studio (optional) | `Husk-ai-lab/husk-ai` | `husk-studio` | 7654 (MCP 7655) |
 
 Release assets must be named `<husk-backend|husk-studio>-<version>-<target triple>.(tar.gz|zip)`
@@ -77,6 +86,7 @@ Needs Rust (stable), Node 20+, Python 3 (test scripts only).
 
 ```bash
 npm install && npm --prefix ui install
+npm run dev                                          # starts the shell (same as `npm run tauri dev`, or `npm start`)
 cargo test --manifest-path src-tauri/Cargo.toml     # core logic, no GUI
 
 # try the whole flow against a local "GitHub" (debug builds only; a release build always uses GitHub)

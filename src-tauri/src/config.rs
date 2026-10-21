@@ -49,7 +49,7 @@ pub const HUSK: ComponentSpec = ComponentSpec {
     display_name: "Husk AI",
     required: true,
     recommended: true,
-    repo: "Husk-ai-lab/HuskAI-core",
+    repo: "Husk-ai-lab/huskai-releases",
     asset_prefix: "husk-backend",
     exe_name: "husk-backend",
     port: HUSK_PORT,

@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / ".local-release"
 
 COMPONENTS = {
-    "husk": {"repo": "Husk-ai-lab/HuskAI-core", "prefix": "husk-backend", "exe": "husk-backend", "port": 8765},
+    "husk": {"repo": "Husk-ai-lab/huskai-releases", "prefix": "husk-backend", "exe": "husk-backend", "port": 8765},
     "studio": {"repo": "Husk-ai-lab/husk-ai", "prefix": "husk-studio", "exe": "husk-studio", "port": 7654},
 }
 
